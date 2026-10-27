@@ -13,7 +13,9 @@ use crate::store::{Lists, Status, Store};
 const FALLBACK_PROTOCOL_VERSION: &str = "2025-06-18";
 
 const INSTRUCTIONS: &str = "Checklists shared with the user, who watches them live in a terminal UI. \
-Item ids are stable and never reused; call list_items to find them. \
+Items are numbered by position (id 1 is the top), and the numbers close up whenever items are \
+removed or moved, by you or by the user, so call list_items again before acting on ids you read \
+a while ago. \
 Prefer checking items off over removing them so the user can see what was done. \
 To track the work of a session or task, keep it in its own list: pass a short kebab-case \
 `list` name such as \"auth-refactor\" (created on first write) and tell the user they can \
@@ -142,7 +144,11 @@ fn call(lists: &Lists, default: &Store, name: &str, args: Value) -> Result<Strin
         "clear_done" => store.update(|l| Ok(l.clear_done()))?,
         _ => bail!("unknown tool: {name}"),
     };
-    Ok(serde_json::to_string_pretty(&items)?)
+    let mut text = serde_json::to_string_pretty(&items)?;
+    if matches!(name, "remove_items" | "clear_done") && !items.is_empty() {
+        text.push_str("\nThe remaining items were renumbered; call list_items for their new ids.");
+    }
+    Ok(text)
 }
 
 fn parse<T: DeserializeOwned>(args: Value) -> Result<T> {
@@ -154,7 +160,7 @@ fn tools(default_list: &str) -> Value {
     let mut tools = json!([
         {
             "name": "list_items",
-            "description": "List checklist items in display order. Each item has an id, its text and a done flag.",
+            "description": "List checklist items top to bottom. Each has an id (its position, starting at 1), its text and a done flag.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -197,7 +203,7 @@ fn tools(default_list: &str) -> Value {
         },
         {
             "name": "remove_items",
-            "description": "Delete items. Fails without changing anything if any id is unknown.",
+            "description": "Delete items. Items below them move up and get new ids. Fails without changing anything if any id is unknown.",
             "inputSchema": { "type": "object", "properties": { "ids": ids }, "required": ["ids"] },
             "annotations": { "destructiveHint": true },
         },

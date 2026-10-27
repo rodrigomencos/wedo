@@ -14,6 +14,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Item {
+    /// The item's position, counting from 1 at the top. Renumbered on every load and save,
+    /// so it changes when items above it are removed or when it is moved.
+    #[serde(default)]
     pub id: u64,
     pub text: String,
     #[serde(default)]
@@ -22,7 +25,8 @@ pub struct Item {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct List {
-    /// Ids are never reused, so an id an agent remembers can't silently point at a new item.
+    /// Always `items.len() + 1`. Still written because older versions require it.
+    #[serde(default)]
     pub next_id: u64,
     pub items: Vec<Item>,
 }
@@ -122,6 +126,14 @@ impl List {
         Ok(())
     }
 
+    /// Numbers the items 1, 2, 3, ... from the top, closing gaps left by removals.
+    fn renumber(&mut self) {
+        for (item, id) in self.items.iter_mut().zip(1..) {
+            item.id = id;
+        }
+        self.next_id = self.items.len() as u64 + 1;
+    }
+
     fn index(&self, id: u64) -> Result<usize> {
         match self.items.iter().position(|i| i.id == id) {
             Some(i) => Ok(i),
@@ -181,8 +193,12 @@ impl Store {
     pub fn load(&self) -> Result<List> {
         match fs::read_to_string(&self.path) {
             Ok(s) if s.trim().is_empty() => Ok(List::default()),
-            Ok(s) => serde_json::from_str(&s)
-                .with_context(|| format!("{} is not a valid checklist", self.path.display())),
+            Ok(s) => {
+                let mut list: List = serde_json::from_str(&s)
+                    .with_context(|| format!("{} is not a valid checklist", self.path.display()))?;
+                list.renumber();
+                Ok(list)
+            }
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(List::default()),
             Err(e) => Err(e).with_context(|| format!("reading {}", self.path.display())),
         }
@@ -206,6 +222,7 @@ impl Store {
 
         let mut list = self.load()?;
         let out = f(&mut list)?;
+        list.renumber();
 
         let mut json = serde_json::to_vec_pretty(&list)?;
         json.push(b'\n');
@@ -315,11 +332,67 @@ mod tests {
     }
 
     #[test]
-    fn ids_are_never_reused() {
-        let mut list = List::default();
-        let a = list.add("a").unwrap();
-        list.remove(&[a.id]).unwrap();
-        assert_eq!(list.add("b").unwrap().id, a.id + 1);
+    fn numbers_close_up_after_removal() {
+        let store = temp_store("renumber");
+        store
+            .update(|l| {
+                ["a", "b", "c"]
+                    .iter()
+                    .map(|t| l.add(t))
+                    .collect::<Result<Vec<_>>>()
+            })
+            .unwrap();
+        let removed = store.update(|l| l.remove(&[2])).unwrap();
+        assert_eq!(removed[0].id, 2, "reports the number it had when removed");
+        let numbered: Vec<_> = store
+            .load()
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|i| (i.id, i.text))
+            .collect();
+        assert_eq!(numbered, [(1, "a".to_string()), (2, "c".to_string())]);
+        assert_eq!(store.update(|l| l.add("d")).unwrap().id, 3);
+    }
+
+    #[test]
+    fn numbers_follow_display_order() {
+        let store = temp_store("order");
+        store
+            .update(|l| {
+                ["a", "b", "c"]
+                    .iter()
+                    .map(|t| l.add(t))
+                    .collect::<Result<Vec<_>>>()
+            })
+            .unwrap();
+        store.update(|l| l.move_by(3, -2)).unwrap();
+        let numbered: Vec<_> = store
+            .load()
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|i| (i.id, i.text))
+            .collect();
+        assert_eq!(
+            numbered,
+            [
+                (1, "c".to_string()),
+                (2, "a".to_string()),
+                (3, "b".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn files_with_gaps_load_renumbered() {
+        let store = temp_store("gaps");
+        fs::create_dir_all(store.path().parent().unwrap()).unwrap();
+        let json = r#"{"next_id": 16, "items": [{"id": 3, "text": "a"}, {"id": 15, "text": "b"}]}"#;
+        fs::write(store.path(), json).unwrap();
+        let list = store.load().unwrap();
+        assert_eq!(list.items.iter().map(|i| i.id).collect::<Vec<_>>(), [1, 2]);
+        assert_eq!(list.next_id, 3);
     }
 
     #[test]

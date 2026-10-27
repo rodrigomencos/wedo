@@ -230,11 +230,16 @@ impl App {
                 };
             }
             (KeyCode::Char('d'), Some(id)) => self.mode = Mode::Confirm(Action::Delete(id)),
+            // Numbers follow position, so follow the moved item by index rather than by id.
             (KeyCode::Char('J'), Some(id)) => {
-                self.apply(|l| l.move_by(id, 1));
+                if self.apply(|l| l.move_by(id, 1)).is_some() {
+                    self.select(index + 1);
+                }
             }
             (KeyCode::Char('K'), Some(id)) => {
-                self.apply(|l| l.move_by(id, -1));
+                if self.apply(|l| l.move_by(id, -1)).is_some() {
+                    self.select(index.saturating_sub(1));
+                }
             }
             _ => {}
         }
