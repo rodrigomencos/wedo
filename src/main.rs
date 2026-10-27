@@ -48,6 +48,9 @@ enum Command {
     Add {
         #[arg(required = true)]
         texts: Vec<String>,
+        /// Insert after this item instead of at the end (0 for the top)
+        #[arg(long, value_name = "ID")]
+        after: Option<u64>,
     },
     /// Check items off
     Done {
@@ -106,10 +109,9 @@ fn main() -> Result<()> {
             };
             (None, store.load()?.filtered(status))
         }
-        Command::Add { texts } => (
-            Some("added"),
-            store.update(|l| texts.iter().map(|t| l.add(t)).collect())?,
-        ),
+        Command::Add { texts, after } => {
+            (Some("added"), store.update(|l| l.add_all(after, &texts))?)
+        }
         Command::Done { ids } => (Some("checked"), store.update(|l| l.set_done(&ids, true))?),
         Command::Undo { ids } => (
             Some("unchecked"),

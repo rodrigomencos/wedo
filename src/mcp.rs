@@ -87,6 +87,7 @@ struct ListArgs {
 #[derive(Deserialize)]
 struct AddArgs {
     items: Vec<String>,
+    after: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -127,7 +128,7 @@ fn call(lists: &Lists, default: &Store, name: &str, args: Value) -> Result<Strin
             if a.items.is_empty() {
                 bail!("items is empty");
             }
-            store.update(|l| a.items.iter().map(|t| l.add(t)).collect())?
+            store.update(|l| l.add_all(a.after, &a.items))?
         }
         "set_done" => {
             let a: SetDoneArgs = parse(args)?;
@@ -171,11 +172,12 @@ fn tools(default_list: &str) -> Value {
         },
         {
             "name": "add_items",
-            "description": "Append items to the end of the checklist. Returns the new items with their ids.",
+            "description": "Add items to the checklist, at the end or after a given item. Returns the new items with their ids.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "items": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Text of each item to add" },
+                    "after": { "type": "integer", "minimum": 0, "description": "Insert after this item id instead of at the end; 0 inserts at the top" },
                 },
                 "required": ["items"],
             },

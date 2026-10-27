@@ -10,7 +10,7 @@ use ratatui::widgets::{Block, HighlightSpacing, List as ListWidget, ListItem, Pa
 use unicode_width::UnicodeWidthStr;
 
 use super::wrap::wrap;
-use super::{Action, App, Mode};
+use super::{Action, App, Mode, Target};
 use crate::theme::ACCENT;
 
 const HIGHLIGHT_SYMBOL: &str = "› ";
@@ -99,11 +99,10 @@ impl App {
         }
 
         let line = match &self.mode {
-            Mode::Input { id, input } => {
-                let prompt = if id.is_some() {
-                    "edit › "
-                } else {
-                    "add › "
+            Mode::Input { target, input } => {
+                let prompt = match target {
+                    Target::Add(_) => "add › ",
+                    Target::Edit(_) => "edit › ",
                 };
                 let available = (footer.width as usize).saturating_sub(prompt.width() + 1);
                 let (visible, cursor_x) = input.view(available);

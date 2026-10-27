@@ -22,12 +22,19 @@ const POLL: Duration = Duration::from_millis(250);
 
 enum Mode {
     Normal,
-    /// Typing an item's text: a new item when `id` is None, otherwise an edit.
+    /// Typing an item's text.
     Input {
-        id: Option<u64>,
+        target: Target,
         input: Input,
     },
     Confirm(Action),
+}
+
+#[derive(Clone, Copy)]
+enum Target {
+    /// A new item that will end up at this index.
+    Add(usize),
+    Edit(u64),
 }
 
 #[derive(Clone, Copy)]
@@ -164,12 +171,12 @@ impl App {
         self.error = None;
         match std::mem::replace(&mut self.mode, Mode::Normal) {
             Mode::Normal => self.on_normal_key(key),
-            Mode::Input { id, mut input } => match key.code {
+            Mode::Input { target, mut input } => match key.code {
                 KeyCode::Esc => {}
-                KeyCode::Enter => self.submit(id, &input.text),
+                KeyCode::Enter => self.submit(target, &input.text),
                 _ => {
                     input.on_key(key);
-                    self.mode = Mode::Input { id, input };
+                    self.mode = Mode::Input { target, input };
                 }
             },
             Mode::Confirm(action) => {
@@ -191,9 +198,15 @@ impl App {
             (KeyCode::Char('k') | KeyCode::Up, _) => self.select(index.saturating_sub(1)),
             (KeyCode::Char('g') | KeyCode::Home, _) => self.select(0),
             (KeyCode::Char('G') | KeyCode::End, _) => self.select(usize::MAX),
-            (KeyCode::Char('a' | 'o'), _) => {
+            (KeyCode::Char(c @ ('a' | 'o' | 'O')), _) => {
+                let at = match c {
+                    'a' => self.list.items.len(),
+                    'o' if self.list.items.is_empty() => 0,
+                    'o' => index + 1,
+                    _ => index,
+                };
                 self.mode = Mode::Input {
-                    id: None,
+                    target: Target::Add(at),
                     input: Input::default(),
                 }
             }
@@ -212,7 +225,7 @@ impl App {
                     .map(|i| i.text.clone())
                     .unwrap_or_default();
                 self.mode = Mode::Input {
-                    id: Some(id),
+                    target: Target::Edit(id),
                     input: Input::new(text),
                 };
             }
@@ -232,16 +245,16 @@ impl App {
         }
     }
 
-    fn submit(&mut self, id: Option<u64>, text: &str) {
+    fn submit(&mut self, target: Target, text: &str) {
         if text.trim().is_empty() {
             return;
         }
-        match id {
-            Some(id) => {
+        match target {
+            Target::Edit(id) => {
                 self.apply(|l| l.edit(id, text));
             }
-            None => {
-                if let Some(item) = self.apply(|l| l.add(text)) {
+            Target::Add(at) => {
+                if let Some(item) = self.apply(|l| l.insert(at, text)) {
                     self.select_id(item.id);
                 }
             }

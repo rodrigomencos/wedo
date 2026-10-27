@@ -72,15 +72,34 @@ impl List {
         self.items.iter().find(|i| i.id == id)
     }
 
-    pub fn add(&mut self, text: &str) -> Result<Item> {
+    /// Inserts a new item so it ends up at `index` (0 is the top), returning it with its number.
+    pub fn insert(&mut self, index: usize, text: &str) -> Result<Item> {
+        let index = index.min(self.items.len());
         let item = Item {
-            id: self.next_id,
+            id: 0,
             text: clean(text)?,
             done: false,
         };
-        self.next_id += 1;
-        self.items.push(item.clone());
-        Ok(item)
+        self.items.insert(index, item);
+        self.renumber();
+        Ok(self.items[index].clone())
+    }
+
+    /// Adds `texts` in order right after item `after` (0 for the very top), or at the end.
+    pub fn add_all(&mut self, after: Option<u64>, texts: &[String]) -> Result<Vec<Item>> {
+        let mut index = match after {
+            None => self.items.len(),
+            Some(0) => 0,
+            Some(id) => self.index(id)? + 1,
+        };
+        texts
+            .iter()
+            .map(|text| {
+                let item = self.insert(index, text)?;
+                index += 1;
+                Ok(item)
+            })
+            .collect()
     }
 
     /// Checks or unchecks every id, or none of them if any id is unknown.
@@ -325,6 +344,12 @@ fn check_name(name: &str) -> Result<()> {
 mod tests {
     use super::*;
 
+    impl List {
+        fn push(&mut self, text: &str) -> Result<Item> {
+            self.insert(self.items.len(), text)
+        }
+    }
+
     fn temp_store(name: &str) -> Store {
         let dir = std::env::temp_dir().join(format!("wedo-test-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -338,7 +363,7 @@ mod tests {
             .update(|l| {
                 ["a", "b", "c"]
                     .iter()
-                    .map(|t| l.add(t))
+                    .map(|t| l.push(t))
                     .collect::<Result<Vec<_>>>()
             })
             .unwrap();
@@ -352,7 +377,7 @@ mod tests {
             .map(|i| (i.id, i.text))
             .collect();
         assert_eq!(numbered, [(1, "a".to_string()), (2, "c".to_string())]);
-        assert_eq!(store.update(|l| l.add("d")).unwrap().id, 3);
+        assert_eq!(store.update(|l| l.push("d")).unwrap().id, 3);
     }
 
     #[test]
@@ -362,7 +387,7 @@ mod tests {
             .update(|l| {
                 ["a", "b", "c"]
                     .iter()
-                    .map(|t| l.add(t))
+                    .map(|t| l.push(t))
                     .collect::<Result<Vec<_>>>()
             })
             .unwrap();
@@ -398,7 +423,7 @@ mod tests {
     #[test]
     fn unknown_id_changes_nothing() {
         let mut list = List::default();
-        let a = list.add("a").unwrap();
+        let a = list.push("a").unwrap();
         assert!(list.set_done(&[a.id, 99], true).is_err());
         assert!(!list.items[0].done);
         assert!(list.remove(&[a.id, 99]).is_err());
@@ -408,15 +433,27 @@ mod tests {
     #[test]
     fn text_is_single_line() {
         let mut list = List::default();
-        assert_eq!(list.add("  buy\n milk \n").unwrap().text, "buy milk");
-        assert!(list.add(" \n ").is_err());
+        assert_eq!(list.push("  buy\n milk \n").unwrap().text, "buy milk");
+        assert!(list.push(" \n ").is_err());
+    }
+
+    #[test]
+    fn add_after_inserts_in_order() {
+        let mut list = List::default();
+        list.add_all(None, &["a".into(), "d".into()]).unwrap();
+        let added = list.add_all(Some(1), &["b".into(), "c".into()]).unwrap();
+        assert_eq!(added.iter().map(|i| i.id).collect::<Vec<_>>(), [2, 3]);
+        list.add_all(Some(0), &["top".into()]).unwrap();
+        let order: Vec<_> = list.items.iter().map(|i| i.text.as_str()).collect();
+        assert_eq!(order, ["top", "a", "b", "c", "d"]);
+        assert!(list.add_all(Some(99), &["x".into()]).is_err());
     }
 
     #[test]
     fn move_stops_at_the_ends() {
         let mut list = List::default();
         for t in ["a", "b", "c"] {
-            list.add(t).unwrap();
+            list.push(t).unwrap();
         }
         list.move_by(1, 10).unwrap();
         list.move_by(3, -10).unwrap();
@@ -450,7 +487,7 @@ mod tests {
         let dir = store.path().parent().unwrap().to_path_buf();
         let lists = Lists::new(dir.clone());
         assert!(lists.names().unwrap().is_empty());
-        lists.open("b").unwrap().update(|l| l.add("x")).unwrap();
+        lists.open("b").unwrap().update(|l| l.push("x")).unwrap();
         lists
             .open("a")
             .unwrap()
@@ -465,7 +502,7 @@ mod tests {
     #[test]
     fn failed_update_writes_nothing() {
         let store = temp_store("failed");
-        store.update(|l| l.add("a")).unwrap();
+        store.update(|l| l.push("a")).unwrap();
         assert!(store.update(|l| l.edit(42, "x")).is_err());
         assert_eq!(store.load().unwrap().items.len(), 1);
     }
@@ -478,7 +515,7 @@ mod tests {
                 let store = store.clone();
                 std::thread::spawn(move || {
                     for n in 0..25 {
-                        store.update(|l| l.add(&format!("{t}-{n}"))).unwrap();
+                        store.update(|l| l.push(&format!("{t}-{n}"))).unwrap();
                     }
                 })
             })
