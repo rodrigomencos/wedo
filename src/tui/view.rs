@@ -23,6 +23,8 @@ const HELP: &[(&str, &str)] = &[
     ("d", "delete"),
     ("J/K", "move"),
     ("c", "clear done"),
+    ("h", "hide done"),
+    ("n/N", "next open"),
     ("q", "quit"),
 ];
 
@@ -43,28 +45,40 @@ impl App {
                     .fg(ACCENT),
             )
             .title(
-                Line::from(format!(" {done}/{total} "))
-                    .fg(if all_done { Color::Green } else { Color::Reset })
-                    .not_dim()
-                    .right_aligned(),
+                Line::from(format!(
+                    " {done}/{total}{} ",
+                    if self.hide_done {
+                        " · done hidden"
+                    } else {
+                        ""
+                    }
+                ))
+                .fg(if all_done { Color::Green } else { Color::Reset })
+                .not_dim()
+                .right_aligned(),
             )
             .title_bottom(Line::from(format!(" {} ", tilde(self.store.path()))).right_aligned());
 
-        if self.list.items.is_empty() {
+        if self.rows.is_empty() {
+            let (before, key, after) = if self.list.items.is_empty() {
+                ("Nothing to do. Press ", "a", " to add an item.")
+            } else {
+                ("Everything's done. Press ", "h", " to show finished items.")
+            };
             let hint = Paragraph::new(Line::from(vec![
-                "Nothing to do. Press ".dim(),
-                "a".bold().fg(ACCENT),
-                " to add an item.".dim(),
+                before.dim(),
+                key.bold().fg(ACCENT),
+                after.dim(),
             ]))
             .centered()
             .block(block);
             frame.render_widget(hint, main);
         } else {
+            let items = &self.list.items;
             let id_width = self
-                .list
-                .items
+                .rows
                 .iter()
-                .map(|i| i.id.to_string().len())
+                .map(|&i| items[i].id.to_string().len())
                 .max()
                 .unwrap_or(1);
             // "<id> [x] ", then the text; wrapped lines are indented to line up under it.
@@ -74,40 +88,40 @@ impl App {
                 .saturating_sub(borders + HIGHLIGHT_SYMBOL.width() + prefix_width)
                 .max(1);
             let indent = " ".repeat(prefix_width);
-            let sections = section_progress(&self.list.items);
+            let sections = section_progress(items);
             // Headings start where the checkbox would, so they stand out from their items.
             let heading_width = text_width + prefix_width - (id_width + 1);
-            let rows = self
-                .list
-                .items
-                .iter()
-                .zip(&sections)
-                .map(|(item, &(done, total))| {
-                    if item.is_heading() {
-                        return ListItem::new(heading_lines(
-                            item,
-                            id_width,
-                            heading_width,
-                            done,
-                            total,
-                        ));
-                    }
-                    let (mark, style) = if item.done {
-                        ("✓".green(), Style::new().dim().crossed_out())
-                    } else {
-                        (" ".into(), Style::new())
-                    };
-                    let mut lines = wrap(&item.text, text_width).into_iter();
-                    let first = Line::from(vec![
-                        format!("{:>id_width$} [", item.id).dim(),
-                        mark,
-                        "] ".dim(),
-                        Span::styled(lines.next().unwrap_or_default(), style),
-                    ]);
-                    let rest = lines
-                        .map(|l| Line::from(vec![indent.as_str().into(), Span::styled(l, style)]));
-                    ListItem::new(std::iter::once(first).chain(rest).collect::<Vec<_>>())
-                });
+            let rows =
+                self.rows
+                    .iter()
+                    .map(|&i| (&items[i], sections[i]))
+                    .map(|(item, (done, total))| {
+                        if item.is_heading() {
+                            return ListItem::new(heading_lines(
+                                item,
+                                id_width,
+                                heading_width,
+                                done,
+                                total,
+                            ));
+                        }
+                        let (mark, style) = if item.done {
+                            ("✓".green(), Style::new().dim().crossed_out())
+                        } else {
+                            (" ".into(), Style::new())
+                        };
+                        let mut lines = wrap(&item.text, text_width).into_iter();
+                        let first = Line::from(vec![
+                            format!("{:>id_width$} [", item.id).dim(),
+                            mark,
+                            "] ".dim(),
+                            Span::styled(lines.next().unwrap_or_default(), style),
+                        ]);
+                        let rest = lines.map(|l| {
+                            Line::from(vec![indent.as_str().into(), Span::styled(l, style)])
+                        });
+                        ListItem::new(std::iter::once(first).chain(rest).collect::<Vec<_>>())
+                    });
             let list = ListWidget::new(rows)
                 .block(block)
                 .highlight_symbol(Line::from(HIGHLIGHT_SYMBOL).fg(ACCENT))
@@ -139,9 +153,10 @@ impl App {
             Mode::Confirm(Action::ClearDone) => {
                 Line::from(format!("delete {done} finished items? (y/N)")).yellow()
             }
-            Mode::Normal => match &self.error {
-                Some(error) => Line::from(error.as_str()).red(),
-                None => Line::from(
+            Mode::Normal => match (&self.error, &self.notice) {
+                (Some(error), _) => Line::from(error.as_str()).red(),
+                (None, Some(notice)) => Line::from(notice.as_str()).fg(ACCENT),
+                (None, None) => Line::from(
                     HELP.iter()
                         .chain(self.lists.is_some().then_some(&("tab", "lists")))
                         .flat_map(|(key, what)| {

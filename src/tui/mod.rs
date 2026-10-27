@@ -13,7 +13,7 @@ use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::ListState;
 
-use crate::store::{List, Lists, Store};
+use crate::store::{Item, List, Lists, Store};
 use crate::theme::Theme;
 
 use input::Input;
@@ -50,10 +50,13 @@ pub fn run(store: Store, lists: Option<Lists>) -> Result<()> {
         store,
         lists,
         list: List::default(),
+        rows: Vec::new(),
+        hide_done: false,
         seen: None,
         state: ListState::default(),
         mode: Mode::Normal,
         error: None,
+        notice: None,
         quit: false,
     };
     app.reload();
@@ -64,11 +67,17 @@ struct App {
     store: Store,
     lists: Option<Lists>,
     list: List,
+    /// Indices into `list.items` of the rows on screen, top to bottom.
+    rows: Vec<usize>,
+    hide_done: bool,
     /// mtime of the file when `list` was loaded.
     seen: Option<SystemTime>,
+    /// The selected row (an index into `rows`, not into the list).
     state: ListState,
     mode: Mode,
     error: Option<String>,
+    /// A message for the footer that isn't an error.
+    notice: Option<String>,
     theme: Theme,
     quit: bool,
 }
@@ -90,16 +99,38 @@ impl App {
     }
 
     fn reload(&mut self) {
-        let selected = self.selected_id();
+        let anchor = self.anchor();
         // Read the mtime first: a write landing mid-load then just triggers another reload.
         self.seen = self.store.modified();
         match self.store.load() {
             Ok(list) => self.list = list,
             Err(e) => self.error = Some(format!("{e:#}")),
         }
-        if !selected.is_some_and(|id| self.select_id(id)) {
-            self.select(self.state.selected().unwrap_or(0));
-        }
+        self.refresh_rows(anchor);
+    }
+
+    /// The selected item's position and text, to find it again after the list changes.
+    fn anchor(&self) -> Option<(usize, String)> {
+        let index = self.selected_index()?;
+        Some((index, self.list.items[index].text.clone()))
+    }
+
+    /// Recomputes which items are shown and keeps the selection on the same item: the
+    /// one with the same text nearest its old position. Numbers shift, so ids won't do.
+    fn refresh_rows(&mut self, anchor: Option<(usize, String)>) {
+        let row = self.state.selected().unwrap_or(0);
+        self.rows = visible_rows(&self.list.items, |item| self.shows(item), false);
+        let found = anchor.and_then(|(index, text)| {
+            let rows = self.rows.iter().enumerate();
+            rows.filter(|&(_, &i)| self.list.items[i].text == text)
+                .min_by_key(|&(_, &i)| i.abs_diff(index))
+                .map(|(row, _)| row)
+        });
+        self.select(found.unwrap_or(row));
+    }
+
+    fn shows(&self, item: &Item) -> bool {
+        !(self.hide_done && item.done)
     }
 
     /// Runs a change against the file, then reloads to pick up anything else that changed.
@@ -144,23 +175,46 @@ impl App {
         }
     }
 
+    /// The selected item's index in `list.items`.
+    fn selected_index(&self) -> Option<usize> {
+        self.rows.get(self.state.selected()?).copied()
+    }
+
     fn selected_id(&self) -> Option<u64> {
-        let index = self.state.selected()?;
-        self.list.items.get(index).map(|i| i.id)
+        Some(self.list.items[self.selected_index()?].id)
     }
 
-    fn select(&mut self, index: usize) {
-        let last = self.list.items.len().checked_sub(1);
-        self.state.select(last.map(|last| index.min(last)));
+    fn select(&mut self, row: usize) {
+        let last = self.rows.len().checked_sub(1);
+        self.state.select(last.map(|last| row.min(last)));
     }
 
-    /// Selects the item with `id`, returning false if it no longer exists.
-    fn select_id(&mut self, id: u64) -> bool {
-        let index = self.list.items.iter().position(|i| i.id == id);
-        if let Some(index) = index {
-            self.state.select(Some(index));
+    /// Selects the row showing `list.items[index]`, if it's on screen.
+    fn select_index(&mut self, index: usize) {
+        if let Some(row) = self.rows.iter().position(|&i| i == index) {
+            self.state.select(Some(row));
         }
-        index.is_some()
+    }
+
+    /// Moves to the next (or previous) unfinished task on screen.
+    fn jump_to_open(&mut self, forward: bool) {
+        let row = self.state.selected().unwrap_or(0);
+        let open = |r: &usize| {
+            let item = &self.list.items[self.rows[*r]];
+            !item.done && !item.is_heading()
+        };
+        let found = if forward {
+            (row + 1..self.rows.len()).find(open)
+        } else {
+            (0..row).rev().find(open)
+        };
+        match found {
+            Some(row) => self.select(row),
+            None => {
+                let direction = if forward { "below" } else { "above" };
+                self.notice = Some(format!("no open items {direction}"));
+            }
+        }
     }
 
     fn on_key(&mut self, key: KeyEvent) {
@@ -169,6 +223,7 @@ impl App {
             return;
         }
         self.error = None;
+        self.notice = None;
         match std::mem::replace(&mut self.mode, Mode::Normal) {
             Mode::Normal => self.on_normal_key(key),
             Mode::Input { target, mut input } => match key.code {
@@ -191,19 +246,25 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return;
         }
-        let index = self.state.selected().unwrap_or(0);
+        let row = self.state.selected().unwrap_or(0);
+        let index = self.selected_index();
         match (key.code, self.selected_id()) {
             (KeyCode::Char('q') | KeyCode::Esc, _) => self.quit = true,
-            (KeyCode::Char('j') | KeyCode::Down, _) => self.select(index + 1),
-            (KeyCode::Char('k') | KeyCode::Up, _) => self.select(index.saturating_sub(1)),
+            (KeyCode::Char('j') | KeyCode::Down, _) => self.select(row + 1),
+            (KeyCode::Char('k') | KeyCode::Up, _) => self.select(row.saturating_sub(1)),
             (KeyCode::Char('g') | KeyCode::Home, _) => self.select(0),
             (KeyCode::Char('G') | KeyCode::End, _) => self.select(usize::MAX),
+            (KeyCode::Char('n'), _) => self.jump_to_open(true),
+            (KeyCode::Char('N'), _) => self.jump_to_open(false),
+            (KeyCode::Char('h'), _) => {
+                self.hide_done = !self.hide_done;
+                self.refresh_rows(self.anchor());
+            }
             (KeyCode::Char(c @ ('a' | 'o' | 'O')), _) => {
-                let at = match c {
-                    'a' => self.list.items.len(),
-                    'o' if self.list.items.is_empty() => 0,
-                    'o' => index + 1,
-                    _ => index,
+                let at = match (c, index) {
+                    ('o', Some(index)) => index + 1,
+                    ('O', Some(index)) => index,
+                    _ => self.list.items.len(),
                 };
                 self.mode = Mode::Input {
                     target: Target::Add(at),
@@ -230,18 +291,21 @@ impl App {
                 };
             }
             (KeyCode::Char('d'), Some(id)) => self.mode = Mode::Confirm(Action::Delete(id)),
-            // Numbers follow position, so follow the moved item by index rather than by id.
-            (KeyCode::Char('J'), Some(id)) => {
-                if self.apply(|l| l.move_by(id, 1)).is_some() {
-                    self.select(index + 1);
-                }
-            }
-            (KeyCode::Char('K'), Some(id)) => {
-                if self.apply(|l| l.move_by(id, -1)).is_some() {
-                    self.select(index.saturating_sub(1));
-                }
-            }
+            (KeyCode::Char(c @ ('J' | 'K')), Some(id)) => self.move_item(id, c == 'J'),
             _ => {}
+        }
+    }
+
+    fn move_item(&mut self, id: u64, down: bool) {
+        // With rows hidden, one step could swap with an invisible item and look like nothing happened.
+        if self.rows.len() != self.list.items.len() {
+            self.error = Some("show every item to reorder (press h)".into());
+            return;
+        }
+        let step = if down { 1 } else { -1 };
+        if self.apply(|l| l.move_by(id, step)).is_some() {
+            let index = (id as usize - 1).saturating_add_signed(step);
+            self.select_index(index.min(self.list.items.len().saturating_sub(1)));
         }
     }
 
@@ -255,7 +319,7 @@ impl App {
             }
             Target::Add(at) => {
                 if let Some(item) = self.apply(|l| l.insert(at, text)) {
-                    self.select_id(item.id);
+                    self.select_index(item.id as usize - 1);
                 }
             }
         }
@@ -270,5 +334,50 @@ impl App {
                 self.apply(|l| Ok(l.clear_done()));
             }
         }
+    }
+}
+
+/// The indices of the items `shows` accepts, each under its heading. Headings stay
+/// even when everything under them is hidden, unless `drop_empty_sections`.
+fn visible_rows(
+    items: &[Item],
+    shows: impl Fn(&Item) -> bool,
+    drop_empty_sections: bool,
+) -> Vec<usize> {
+    let mut rows = Vec::new();
+    let mut heading = None;
+    for (i, item) in items.iter().enumerate() {
+        if item.is_heading() {
+            if drop_empty_sections {
+                heading = Some(i);
+            } else {
+                rows.push(i);
+            }
+        } else if shows(item) {
+            rows.extend(heading.take());
+            rows.push(i);
+        }
+    }
+    rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::visible_rows;
+    use crate::store::List;
+
+    #[test]
+    fn rows_keep_items_under_their_headings() {
+        let mut list = List::default();
+        let texts = ["# A", "a1", "a2", "# B", "b1", "# C"].map(String::from);
+        list.add_all(None, &texts).unwrap();
+        list.set_done(&[2, 5], true).unwrap();
+        let pending = |i: &crate::store::Item| !i.done;
+        assert_eq!(visible_rows(&list.items, pending, false), [0, 2, 3, 5]);
+        assert_eq!(visible_rows(&list.items, pending, true), [0, 2]);
+        assert_eq!(
+            visible_rows(&list.items, |_| true, false),
+            [0, 1, 2, 3, 4, 5]
+        );
     }
 }
