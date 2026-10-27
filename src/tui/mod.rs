@@ -75,8 +75,9 @@ enum Action {
     DeleteList(String),
 }
 
-/// `lists` is the directory `store` belongs to, if `tab` may switch to its other lists.
-pub fn run(store: Store, lists: Option<Lists>) -> Result<()> {
+/// `lists` is the directory `store` belongs to, if the TUI may switch to its other
+/// lists; `start_in_lists` puts the focus in the lists sidebar rather than the items.
+pub fn run(store: Store, lists: Option<Lists>, start_in_lists: bool) -> Result<()> {
     let mut app = App {
         theme: Theme::detect(),
         store: store.with_author(AUTHOR),
@@ -102,6 +103,9 @@ pub fn run(store: Store, lists: Option<Lists>) -> Result<()> {
     };
     app.reload();
     app.refresh_sidebar();
+    if start_in_lists && app.lists.is_some() {
+        app.show_lists();
+    }
     ratatui::run(|terminal| app.run(terminal))
 }
 
@@ -178,16 +182,20 @@ impl App {
     }
 
     fn on_mouse(&mut self, mouse: MouseEvent) {
-        if !matches!(self.mode, Mode::Normal) {
+        let in_lists = matches!(self.mode, Mode::Lists { .. });
+        if !matches!(self.mode, Mode::Normal) && !in_lists {
             return;
         }
         self.error = None;
         let row = self.state.selected().unwrap_or(0);
+        let list_row = self.current_in_sidebar().unwrap_or(0);
         let at = Position {
             x: mouse.column,
             y: mouse.row,
         };
         match mouse.kind {
+            MouseEventKind::ScrollDown if in_lists => self.sidebar_move(list_row + 1),
+            MouseEventKind::ScrollUp if in_lists => self.sidebar_move(list_row.saturating_sub(1)),
             MouseEventKind::ScrollDown => self.select(row + 1),
             MouseEventKind::ScrollUp => self.select(row.saturating_sub(1)),
             MouseEventKind::Down(MouseButton::Left) => {
@@ -200,10 +208,12 @@ impl App {
                     {
                         self.open_list(&name);
                     }
+                    self.show_lists();
                     return;
                 }
                 let clicked = self.rows_at.iter().find(|(lines, _)| lines.contains(&at.y));
                 if let Some(&(_, row)) = clicked {
+                    self.mode = Mode::Normal;
                     self.select(row);
                     if self.checkbox.contains(&at.x) {
                         self.toggle_selected();
@@ -379,11 +389,14 @@ impl App {
             (KeyCode::Char('k') | KeyCode::Up, _) => {
                 return self.sidebar_move(row.saturating_sub(1));
             }
-            // Back to the items.
-            (
-                KeyCode::Enter | KeyCode::Right | KeyCode::Esc | KeyCode::Char('l' | 'L' | 'q'),
-                _,
-            ) => {
+            // Into the list's items.
+            (KeyCode::Enter | KeyCode::Right | KeyCode::Char('l' | 'L'), _) => return,
+            (KeyCode::Char('q'), _) => {
+                self.quit = true;
+                return;
+            }
+            (KeyCode::Char('?'), _) => {
+                self.mode = Mode::Help;
                 return;
             }
             (KeyCode::Char('n'), _) => {
@@ -464,6 +477,7 @@ impl App {
             Mode::Normal => self.on_normal_key(key),
             Mode::Input { target, mut input } => match (key.code, target) {
                 (KeyCode::Esc, Target::Search) => self.set_filter(String::new()),
+                (KeyCode::Esc, Target::NewList) => self.show_lists(),
                 (KeyCode::Esc, _) => {}
                 (KeyCode::Enter, _) => self.submit(target, &input.text),
                 _ => {
@@ -475,8 +489,12 @@ impl App {
                 }
             },
             Mode::Confirm(action) => {
+                let from_lists = matches!(action, Action::DeleteList(_));
                 if let KeyCode::Char('y' | 'Y') = key.code {
                     self.confirm(action);
+                }
+                if from_lists && matches!(self.mode, Mode::Normal) {
+                    self.show_lists();
                 }
             }
             Mode::Help => {}
@@ -492,6 +510,10 @@ impl App {
         let index = self.selected_index();
         match (key.code, self.selected_id()) {
             (KeyCode::Esc, _) if !self.filter.is_empty() => self.set_filter(String::new()),
+            // Back up to the lists; with a lone --file list there's nowhere up, so esc quits.
+            (KeyCode::Esc | KeyCode::Left | KeyCode::Backspace, _) if self.lists.is_some() => {
+                self.show_lists()
+            }
             (KeyCode::Char('q') | KeyCode::Esc, _) => self.quit = true,
             (KeyCode::Char('?'), _) => self.mode = Mode::Help,
             (KeyCode::Char('/'), _) => {
@@ -522,7 +544,6 @@ impl App {
                 }
             }
             (KeyCode::Char('L'), _) => self.show_lists(),
-            (KeyCode::Left, _) if self.lists.is_some() => self.show_lists(),
             (KeyCode::Tab, _) => self.switch_list(1),
             (KeyCode::BackTab, _) => self.switch_list(-1),
             (KeyCode::Char('c'), _) if self.list.items.iter().any(|i| i.done) => {

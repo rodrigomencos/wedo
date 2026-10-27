@@ -89,6 +89,8 @@ fn main() -> Result<()> {
         (None, None) => env("WEDO_FILE").map(PathBuf::from),
     };
     let author = env("WEDO_AUTHOR").unwrap_or("cli".into());
+    // Naming a list opens it; otherwise the TUI starts in the lists sidebar.
+    let picked_list = cli.list.is_some() || env("WEDO_LIST").is_some();
     let store = match &file {
         Some(path) => Store::new(path.clone()),
         None => lists.open(
@@ -100,7 +102,7 @@ fn main() -> Result<()> {
     .with_author(author);
     let Some(command) = cli.command else {
         // A --file list stands alone; named lists can be switched between.
-        return tui::run(store, file.is_none().then_some(lists));
+        return tui::run(store, file.is_none().then_some(lists), !picked_list);
     };
     let (verb, items) = match command {
         Command::List { pending, done } => {

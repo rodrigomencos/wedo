@@ -20,6 +20,16 @@ use crate::theme::ACCENT;
 const HIGHLIGHT_SYMBOL: &str = "› ";
 
 /// The footer's reminder of the most common keys.
+/// The footer while the lists sidebar has focus.
+const LISTS_FOOTER: &[(&str, &str)] = &[
+    ("j/k", "switch list"),
+    ("→ enter", "open"),
+    ("n", "new list"),
+    ("d", "delete list"),
+    ("?", "all keys"),
+    ("q", "quit"),
+];
+
 const FOOTER: &[(&str, &str)] = &[
     ("space", "check"),
     ("a", "add"),
@@ -39,11 +49,17 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
             ("j k ↓ ↑", "up and down"),
             ("g G", "first and last item"),
             ("n N", "next and previous unfinished item"),
+            ("← esc", "back to the lists"),
             ("tab shift-tab", "next and previous list"),
-            ("← L", "go to the lists sidebar"),
-            ("  j k", "  there: switch lists as you move"),
-            ("  → enter", "  there: back to the items"),
-            ("  n d", "  there: create or delete a list"),
+        ],
+    ),
+    (
+        "Lists",
+        &[
+            ("j k ↓ ↑", "switch lists as you move"),
+            ("→ enter", "open the list"),
+            ("n", "create a list"),
+            ("d", "delete a list"),
         ],
     ),
     (
@@ -66,7 +82,7 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
             ("/", "search; esc clears it"),
             ("y", "copy the item's text"),
             ("m", "turn the mouse off (to select text) or on"),
-            ("q esc", "quit"),
+            ("q", "quit"),
         ],
     ),
 ];
@@ -102,8 +118,15 @@ impl App {
             status.push_str(&format!("· /{} ", self.filter));
         }
         // Titles inherit the border's dim style unless they opt out.
+        // With the sidebar showing, the focused pane gets the accent border and the bar.
+        let items_focused = !matches!(self.mode, Mode::Lists { .. });
+        let border = if items_focused && self.sidebar_area.is_some() {
+            Style::new().fg(ACCENT)
+        } else {
+            Style::new().dim()
+        };
         let block = Block::bordered()
-            .border_style(Style::new().dim())
+            .border_style(border)
             .title(
                 Line::from(format!(" {} ", self.store.name()))
                     .bold()
@@ -116,7 +139,12 @@ impl App {
                     .not_dim()
                     .right_aligned(),
             )
-            .title_bottom(Line::from(format!(" {} ", tilde(self.store.path()))).right_aligned());
+            .title_bottom(
+                Line::from(format!(" {} ", tilde(self.store.path())))
+                    .fg(Color::Reset)
+                    .dim()
+                    .right_aligned(),
+            );
 
         if self.rows.is_empty() {
             let (before, key, after) = if self.list.items.is_empty() {
@@ -193,9 +221,20 @@ impl App {
             let heights: Vec<u16> = rows.iter().map(|r| r.height() as u16).collect();
             let list = ListWidget::new(rows)
                 .block(block)
-                .highlight_symbol(Line::from(HIGHLIGHT_SYMBOL).fg(ACCENT))
+                .highlight_symbol(
+                    Line::from(if items_focused {
+                        HIGHLIGHT_SYMBOL
+                    } else {
+                        "  "
+                    })
+                    .fg(ACCENT),
+                )
                 .highlight_spacing(HighlightSpacing::Always)
-                .highlight_style(self.theme.selected);
+                .highlight_style(if items_focused {
+                    self.theme.selected
+                } else {
+                    Style::new()
+                });
             frame.render_stateful_widget(list, main, &mut self.state);
 
             // Remember where rows landed (the list scrolls itself) so clicks can find them.
@@ -243,28 +282,20 @@ impl App {
                 "delete the list \"{name}\" and all its items? (y/N)"
             ))
             .yellow(),
-            Mode::Lists { .. } => key_hints(&[
-                ("j/k", "switch list"),
-                ("→ enter", "back to items"),
-                ("n", "new list"),
-                ("d", "delete list"),
-            ]),
-            Mode::Normal => match (&self.error, &self.notice) {
+            Mode::Normal | Mode::Lists { .. } => match (&self.error, &self.notice) {
                 (Some(error), _) => Line::from(error.as_str()).red(),
                 (None, Some((notice, at))) if at.elapsed() < HIGHLIGHT_FOR => {
                     Line::from(notice.as_str()).fg(ACCENT)
                 }
-                _ => Line::from(
-                    FOOTER
-                        .iter()
-                        .flat_map(|(key, what)| {
-                            [
-                                Span::from(*key).bold().fg(ACCENT),
-                                Span::from(format!(" {what}  ")).dim(),
-                            ]
-                        })
-                        .collect::<Vec<_>>(),
-                ),
+                _ if matches!(self.mode, Mode::Lists { .. }) => key_hints(LISTS_FOOTER),
+                _ => {
+                    let back: &[(&str, &str)] = if self.lists.is_some() {
+                        &[("←", "lists")]
+                    } else {
+                        &[]
+                    };
+                    key_hints(&[back, FOOTER].concat())
+                }
             },
         };
         frame.render_widget(line, footer);
