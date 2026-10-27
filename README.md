@@ -59,8 +59,8 @@ Every command works on the `default` list unless you pick another with
 time something is written to it:
 
 ```sh
-wedo -l auth-refactor add "write migration" "update tests"
-wedo -l auth-refactor done 1
+wedo -l groceries add "oat milk" "coffee beans"
+wedo -l groceries done 1
 ```
 
 Items are numbered by position, 1 at the top. Deleting, clearing or moving items
