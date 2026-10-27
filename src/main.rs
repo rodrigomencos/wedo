@@ -1,4 +1,5 @@
 mod store;
+mod tui;
 
 use std::path::PathBuf;
 
@@ -69,7 +70,7 @@ fn main() -> Result<()> {
         None => Store::default_path()?,
     });
     let Some(command) = cli.command else {
-        return Ok(());
+        return tui::run(store);
     };
     let (verb, items) = match command {
         Command::List { pending, done } => {
