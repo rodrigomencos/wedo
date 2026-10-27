@@ -46,7 +46,7 @@ otherwise the selected row is shown in reverse video. `NO_COLOR` is respected.
 ```sh
 wedo ls                         # everything; --pending or --done to filter
 wedo add "buy milk" "call mom"  # one item per argument
-wedo done 1 2                   # check off by id
+wedo done 1 2                   # check off by number
 wedo undo 2                     # uncheck
 wedo edit 2 "call mom back"
 wedo rm 1
@@ -63,8 +63,12 @@ wedo -l auth-refactor add "write migration" "update tests"
 wedo -l auth-refactor done 1
 ```
 
+Items are numbered by position, 1 at the top. Deleting, clearing or moving items
+renumbers the rest, so there are never gaps. In `--json` output the number is the
+item's `id`.
+
 Add `--json` to any command for machine-readable output. Commands that take
-several ids are all-or-nothing: if one id doesn't exist, nothing changes and the
+several numbers are all-or-nothing: if one doesn't exist, nothing changes and the
 command exits non-zero.
 
 ## Giving agents access
@@ -100,7 +104,9 @@ Any agent with a shell can use the CLI directly. Something like this in a
 
 ```md
 My checklists are managed with the `wedo` command. Use `wedo --json ls` to read one,
-`wedo add "..."` to add items and `wedo done <id>` to check them off. Ids are stable.
+`wedo add "..."` to add items and `wedo done <id>` to check them off. Ids are
+positions and shift when items are removed or moved, so re-read the list before
+acting on ids you read earlier.
 Pick a list with `-l <name>`; `wedo lists` shows them all.
 ```
 
