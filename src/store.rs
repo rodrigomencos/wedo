@@ -337,12 +337,14 @@ impl Lists {
         Self { dir }
     }
 
-    /// `$XDG_DATA_HOME/wedo`, falling back to `~/.local/share/wedo`.
+    /// `$XDG_DATA_HOME/wedo`, falling back to `~/.local/share/wedo`, or `%APPDATA%\wedo`
+    /// on Windows.
     pub fn default_dir() -> Result<PathBuf> {
-        let base = match std::env::var_os("XDG_DATA_HOME") {
-            Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-            _ => PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?)
-                .join(".local/share"),
+        let var = |name| std::env::var_os(name).filter(|v| !v.is_empty());
+        let base = match var("XDG_DATA_HOME") {
+            Some(dir) => PathBuf::from(dir),
+            None if cfg!(windows) => PathBuf::from(var("APPDATA").context("APPDATA is not set")?),
+            None => PathBuf::from(var("HOME").context("HOME is not set")?).join(".local/share"),
         };
         Ok(base.join("wedo"))
     }
