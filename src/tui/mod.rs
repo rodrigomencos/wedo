@@ -3,6 +3,7 @@
 //! overwrites theirs.
 
 mod changes;
+mod clipboard;
 mod input;
 mod view;
 mod wrap;
@@ -347,8 +348,25 @@ impl App {
                 };
             }
             (KeyCode::Char('d'), Some(id)) => self.mode = Mode::Confirm(Action::Delete(id)),
+            (KeyCode::Char('y'), Some(_)) => self.copy_selected(),
             (KeyCode::Char(c @ ('J' | 'K')), Some(id)) => self.move_item(id, c == 'J'),
             _ => {}
+        }
+    }
+
+    fn copy_selected(&mut self) {
+        let Some(index) = self.selected_index() else {
+            return;
+        };
+        let item = &self.list.items[index];
+        let text = if item.is_heading() {
+            item.heading_title()
+        } else {
+            &item.text
+        };
+        match clipboard::copy(text) {
+            Ok(place) => self.notice = Some((format!("copied to {place}"), Instant::now())),
+            Err(e) => self.error = Some(format!("couldn't copy: {e}")),
         }
     }
 
