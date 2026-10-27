@@ -22,6 +22,7 @@ const HELP: &[(&str, &str)] = &[
     ("e", "edit"),
     ("d", "delete"),
     ("y", "copy"),
+    ("u", "undo"),
     ("J/K", "move"),
     ("c", "clear done"),
     ("h", "hide done"),

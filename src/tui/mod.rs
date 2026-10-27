@@ -5,6 +5,7 @@
 mod changes;
 mod clipboard;
 mod input;
+mod undo;
 mod view;
 mod wrap;
 
@@ -21,11 +22,15 @@ use crate::theme::Theme;
 
 use changes::Changes;
 use input::Input;
+use undo::Undo;
 
 const POLL: Duration = Duration::from_millis(250);
 
 /// How long changes made elsewhere stay highlighted, and notices stay in the footer.
 const HIGHLIGHT_FOR: Duration = Duration::from_secs(6);
+
+/// How many changes `u` can step back through.
+const UNDO_LIMIT: usize = 100;
 
 /// Recorded as the author of changes made in the TUI.
 const AUTHOR: &str = "you";
@@ -63,6 +68,7 @@ pub fn run(store: Store, lists: Option<Lists>) -> Result<()> {
         lists,
         list: List::default(),
         recent: HashMap::new(),
+        undo: Vec::new(),
         rows: Vec::new(),
         hide_done: false,
         filter: String::new(),
@@ -83,6 +89,8 @@ struct App {
     list: List,
     /// Texts of items someone else just changed, and when we noticed.
     recent: HashMap<String, Instant>,
+    /// Reversals of the changes made here, newest last.
+    undo: Vec<Undo>,
     /// Indices into `list.items` of the rows on screen, top to bottom.
     rows: Vec<usize>,
     hide_done: bool,
@@ -213,6 +221,7 @@ impl App {
             Ok(store) => {
                 self.store = store.with_author(AUTHOR);
                 self.recent.clear();
+                self.undo.clear();
                 // Ids are per list, so don't carry the selection over.
                 self.state = ListState::default();
                 self.reload();
@@ -334,8 +343,16 @@ impl App {
                 self.mode = Mode::Confirm(Action::ClearDone)
             }
             (KeyCode::Char(' ') | KeyCode::Enter, Some(id)) => {
-                self.apply(|l| l.toggle(id));
+                let (index, item) = (id as usize - 1, self.list.items[id as usize - 1].clone());
+                if self.apply(|l| l.toggle(id)).is_some() {
+                    self.push_undo(Undo::SetDone {
+                        index,
+                        text: item.text,
+                        done: item.done,
+                    });
+                }
             }
+            (KeyCode::Char('u'), _) => self.undo_last(),
             (KeyCode::Char('e'), Some(id)) => {
                 let text = self
                     .list
@@ -377,9 +394,39 @@ impl App {
             return;
         }
         let step = if down { 1 } else { -1 };
+        let (from, text) = (
+            id as usize - 1,
+            self.list.items[id as usize - 1].text.clone(),
+        );
         if self.apply(|l| l.move_by(id, step)).is_some() {
-            let index = (id as usize - 1).saturating_add_signed(step);
-            self.select_index(index.min(self.list.items.len().saturating_sub(1)));
+            let to = from
+                .saturating_add_signed(step)
+                .min(self.list.items.len().saturating_sub(1));
+            self.select_index(to);
+            self.push_undo(Undo::Move {
+                from: to,
+                to: from,
+                text,
+            });
+        }
+    }
+
+    fn push_undo(&mut self, undo: Undo) {
+        if self.undo.len() == UNDO_LIMIT {
+            self.undo.remove(0);
+        }
+        self.undo.push(undo);
+    }
+
+    fn undo_last(&mut self) {
+        let Some(undo) = self.undo.pop() else {
+            self.notice = Some(("nothing to undo".into(), Instant::now()));
+            return;
+        };
+        let what = undo.describe();
+        if let Some(index) = self.apply(|l| undo.apply(l)) {
+            self.select_index(index);
+            self.notice = Some((what.into(), Instant::now()));
         }
     }
 
@@ -391,11 +438,24 @@ impl App {
             // Already applied while typing.
             Target::Search => {}
             Target::Edit(id) => {
-                self.apply(|l| l.edit(id, text));
+                let was = self.list.items[id as usize - 1].text.clone();
+                if let Some(item) = self.apply(|l| l.edit(id, text)) {
+                    let index = item.id as usize - 1;
+                    self.push_undo(Undo::Edit {
+                        index,
+                        now: item.text,
+                        was,
+                    });
+                }
             }
             Target::Add(at) => {
                 if let Some(item) = self.apply(|l| l.insert(at, text)) {
-                    self.select_index(item.id as usize - 1);
+                    let index = item.id as usize - 1;
+                    self.select_index(index);
+                    self.push_undo(Undo::Remove {
+                        index,
+                        text: item.text,
+                    });
                 }
             }
         }
@@ -404,13 +464,26 @@ impl App {
     fn confirm(&mut self, action: Action) {
         match action {
             Action::Delete(id) => {
-                self.apply(|l| l.remove(&[id]));
+                if let Some(removed) = self.apply(|l| l.remove(&[id])) {
+                    self.push_undo(restore(removed, false));
+                }
             }
             Action::ClearDone => {
-                self.apply(|l| Ok(l.clear_done()));
+                if let Some(removed) = self.apply(|l| Ok(l.clear_done())) {
+                    self.push_undo(restore(removed, true));
+                }
             }
         }
     }
+}
+
+/// Undoing a removal: each item goes back to the position its number recorded.
+fn restore(removed: Vec<Item>, cleared: bool) -> Undo {
+    let items = removed
+        .into_iter()
+        .map(|item| (item.id as usize - 1, item))
+        .collect();
+    Undo::Restore { items, cleared }
 }
 
 /// The indices of the items `shows` accepts, each under its heading. Headings stay
