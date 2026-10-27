@@ -40,7 +40,10 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
             ("g G", "first and last item"),
             ("n N", "next and previous unfinished item"),
             ("tab shift-tab", "next and previous list"),
-            ("L", "go to the lists sidebar: open, create, delete"),
+            ("← L", "go to the lists sidebar"),
+            ("  j k", "  there: switch lists as you move"),
+            ("  → enter", "  there: back to the items"),
+            ("  n d", "  there: create or delete a list"),
         ],
     ),
     (
@@ -241,10 +244,10 @@ impl App {
             ))
             .yellow(),
             Mode::Lists { .. } => key_hints(&[
-                ("enter", "open"),
-                ("n", "new"),
-                ("d", "delete"),
-                ("esc", "close"),
+                ("j/k", "switch list"),
+                ("→ enter", "back to items"),
+                ("n", "new list"),
+                ("d", "delete list"),
             ]),
             Mode::Normal => match (&self.error, &self.notice) {
                 (Some(error), _) => Line::from(error.as_str()).red(),
@@ -273,10 +276,13 @@ impl App {
 }
 
 impl App {
-    /// The sidebar's width, or None to hide it: no other lists to show, or too narrow.
+    /// The sidebar's width, or None to hide it.
     fn sidebar_width(&self, total: u16) -> Option<u16> {
+        // Shown when there's something to switch to and room for it, and always while
+        // it has focus, since you asked for it.
         let focused = matches!(self.mode, Mode::Lists { .. });
-        if self.lists.is_none() || (self.sidebar.len() < 2 && !focused) || total < 60 {
+        let worth_it = self.sidebar.len() > 1 && total >= 60;
+        if self.lists.is_none() || !(focused || worth_it) {
             return None;
         }
         let widest = self
@@ -325,7 +331,7 @@ impl App {
                 Style::new().dim()
             })
             .title(Line::from(" lists ").bold().not_dim().fg(ACCENT))
-            .title_bottom(Line::from(if focused { "" } else { " L " }).right_aligned());
+            .title_bottom(Line::from(if focused { "" } else { " ← " }).right_aligned());
         let list = ListWidget::new(rows)
             .block(block)
             .highlight_symbol(Line::from(HIGHLIGHT_SYMBOL).fg(ACCENT))

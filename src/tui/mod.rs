@@ -320,16 +320,20 @@ impl App {
             Ok(summaries) => self.sidebar = summaries,
             Err(e) => self.error = Some(format!("{e:#}")),
         }
-        // The current list may have no file yet.
-        if self.current_in_sidebar().is_none() {
-            let (done, total) = self.list.progress();
-            self.sidebar.push(Summary {
-                name: self.store.name(),
-                done,
-                total,
-            });
-            self.sidebar.sort_by(|a, b| a.name.cmp(&b.name));
+        // The current list and the default one may have no file yet. Show them anyway,
+        // or leaving one would drop it from the sidebar with no way back.
+        let current = self.store.name();
+        for name in [current.clone(), DEFAULT_LIST.to_string()] {
+            if !self.sidebar.iter().any(|s| s.name == name) {
+                let (done, total) = if name == current {
+                    self.list.progress()
+                } else {
+                    (0, 0)
+                };
+                self.sidebar.push(Summary { name, done, total });
+            }
         }
+        self.sidebar.sort_by(|a, b| a.name.cmp(&b.name));
     }
 
     fn current_in_sidebar(&self) -> Option<usize> {
@@ -364,15 +368,24 @@ impl App {
         self.mode = Mode::Lists { state };
     }
 
-    fn on_lists_key(&mut self, key: KeyEvent, mut state: ListState) {
+    fn on_lists_key(&mut self, key: KeyEvent, state: ListState) {
         let row = state.selected().unwrap_or(0);
         let name = self.sidebar.get(row).map(|s| s.name.clone());
         match (key.code, name) {
+            // Moving switches lists right away, so each one shows as you pass it.
             (KeyCode::Char('j') | KeyCode::Down, _) => {
-                state.select(Some((row + 1).min(self.sidebar.len().saturating_sub(1))))
+                return self.sidebar_move((row + 1).min(self.sidebar.len().saturating_sub(1)));
             }
-            (KeyCode::Char('k') | KeyCode::Up, _) => state.select(Some(row.saturating_sub(1))),
-            (KeyCode::Enter, Some(name)) => return self.open_list(&name),
+            (KeyCode::Char('k') | KeyCode::Up, _) => {
+                return self.sidebar_move(row.saturating_sub(1));
+            }
+            // Back to the items.
+            (
+                KeyCode::Enter | KeyCode::Right | KeyCode::Esc | KeyCode::Char('l' | 'L' | 'q'),
+                _,
+            ) => {
+                return;
+            }
             (KeyCode::Char('n'), _) => {
                 self.mode = Mode::Input {
                     target: Target::NewList,
@@ -384,9 +397,17 @@ impl App {
                 self.mode = Mode::Confirm(Action::DeleteList(name));
                 return;
             }
-            (KeyCode::Esc | KeyCode::Char('q' | 'L'), _) => return,
             _ => {}
         }
+        self.mode = Mode::Lists { state };
+    }
+
+    fn sidebar_move(&mut self, row: usize) {
+        if let Some(name) = self.sidebar.get(row).map(|s| s.name.clone()) {
+            self.open_list(&name);
+        }
+        // Opening rereads the sidebar, so find the list's row again.
+        let state = ListState::default().with_selected(self.current_in_sidebar());
         self.mode = Mode::Lists { state };
     }
 
@@ -501,6 +522,7 @@ impl App {
                 }
             }
             (KeyCode::Char('L'), _) => self.show_lists(),
+            (KeyCode::Left, _) if self.lists.is_some() => self.show_lists(),
             (KeyCode::Tab, _) => self.switch_list(1),
             (KeyCode::BackTab, _) => self.switch_list(-1),
             (KeyCode::Char('c'), _) if self.list.items.iter().any(|i| i.done) => {
@@ -605,6 +627,9 @@ impl App {
                 let name = text.trim();
                 self.open_list(name);
                 if self.error.is_none() {
+                    // Write it now, so it stays in the sidebar before it has any items.
+                    self.apply(|_| Ok(()));
+                    self.refresh_sidebar();
                     let notice = format!("new list {name}: press a to add the first item");
                     self.notice = Some((notice, Instant::now()));
                 }

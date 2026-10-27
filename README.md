@@ -88,7 +88,7 @@ every key.
 | `/` | Search; `esc` clears it |
 | `y` | Copy the item's text |
 | `tab` `shift-tab` | Next / previous list |
-| `L` | Go to the lists sidebar: `enter` opens, `n` creates, `d` deletes |
+| `←` / `L` | Go to the lists sidebar. There, `j` `k` switch lists as you move, `→` or `enter` come back, `n` creates a list and `d` deletes one |
 | `m` | Turn the mouse off (to select text) or back on |
 | `q` / `esc` | Quit |
 
