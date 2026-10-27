@@ -6,7 +6,9 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, HighlightSpacing, List as ListWidget, ListItem, Paragraph};
+use ratatui::widgets::{
+    Block, Clear, HighlightSpacing, List as ListWidget, ListItem, Padding, Paragraph,
+};
 use unicode_width::UnicodeWidthStr;
 
 use super::wrap::wrap;
@@ -16,19 +18,51 @@ use crate::theme::ACCENT;
 
 const HIGHLIGHT_SYMBOL: &str = "› ";
 
-const HELP: &[(&str, &str)] = &[
-    ("space", "toggle"),
+/// The footer's reminder of the most common keys.
+const FOOTER: &[(&str, &str)] = &[
+    ("space", "check"),
     ("a", "add"),
     ("e", "edit"),
     ("d", "delete"),
-    ("y", "copy"),
-    ("u", "undo"),
-    ("J/K", "move"),
-    ("c", "clear done"),
-    ("h", "hide done"),
     ("/", "search"),
-    ("n/N", "next open"),
+    ("u", "undo"),
+    ("?", "all keys"),
     ("q", "quit"),
+];
+
+/// Every key, grouped, for the `?` screen.
+const KEYS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "Move",
+        &[
+            ("j k ↓ ↑", "up and down"),
+            ("g G", "first and last item"),
+            ("n N", "next and previous unfinished item"),
+            ("tab shift-tab", "next and previous list"),
+        ],
+    ),
+    (
+        "Change",
+        &[
+            ("space enter", "check or uncheck"),
+            ("a", "add at the end"),
+            ("o O", "add below or above the selection"),
+            ("e", "edit"),
+            ("d", "delete"),
+            ("J K", "move the item down or up"),
+            ("c", "delete all finished items"),
+            ("u", "undo"),
+        ],
+    ),
+    (
+        "View",
+        &[
+            ("h", "hide or show finished items"),
+            ("/", "search; esc clears it"),
+            ("y", "copy the item's text"),
+            ("q esc", "quit"),
+        ],
+    ),
 ];
 
 impl App {
@@ -167,13 +201,15 @@ impl App {
             Mode::Confirm(Action::ClearDone) => {
                 Line::from(format!("delete {done} finished items? (y/N)")).yellow()
             }
+            Mode::Help => Line::from("press any key to close").dim(),
             Mode::Normal => match (&self.error, &self.notice) {
                 (Some(error), _) => Line::from(error.as_str()).red(),
                 (None, Some((notice, at))) if at.elapsed() < HIGHLIGHT_FOR => {
                     Line::from(notice.as_str()).fg(ACCENT)
                 }
                 _ => Line::from(
-                    HELP.iter()
+                    FOOTER
+                        .iter()
                         .chain(self.lists.is_some().then_some(&("tab", "lists")))
                         .flat_map(|(key, what)| {
                             [
@@ -186,8 +222,54 @@ impl App {
             },
         };
         frame.render_widget(line, footer);
+        if let Mode::Help = self.mode {
+            draw_help(frame);
+        }
         self.theme.finish(frame);
     }
+}
+
+fn draw_help(frame: &mut Frame) {
+    let key_width = KEYS
+        .iter()
+        .flat_map(|(_, keys)| keys.iter())
+        .map(|(k, _)| k.width())
+        .max()
+        .unwrap_or(0);
+    let mut lines = Vec::new();
+    for (group, keys) in KEYS {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        lines.push(Line::from(*group).bold());
+        for (key, what) in *keys {
+            let pad = " ".repeat(key_width - key.width() + 2);
+            lines.push(Line::from(vec![
+                format!("  {key}").fg(ACCENT).bold(),
+                pad.into(),
+                (*what).into(),
+            ]));
+        }
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(vec![
+        "Items written as ".dim(),
+        "# Title".bold(),
+        " are section headings.".dim(),
+    ]));
+
+    // Fit on screen; on a very small one the bottom of the list is cut off.
+    let screen = frame.area();
+    let width = (lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 4).min(screen.width);
+    let height = (lines.len() as u16 + 2).min(screen.height);
+    let area = frame
+        .area()
+        .centered(Constraint::Length(width), Constraint::Length(height));
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .title(Line::from(" keys ").bold().fg(ACCENT))
+        .padding(Padding::horizontal(1));
+    frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 /// A heading as `<id> Title ────── done/total`, or wrapped without the rule when it's too long.

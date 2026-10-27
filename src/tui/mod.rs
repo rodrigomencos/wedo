@@ -43,6 +43,8 @@ enum Mode {
         input: Input,
     },
     Confirm(Action),
+    /// The `?` key reference; any key closes it.
+    Help,
 }
 
 #[derive(Clone, Copy)]
@@ -298,6 +300,7 @@ impl App {
                     self.confirm(action);
                 }
             }
+            Mode::Help => {}
         }
     }
 
@@ -310,6 +313,7 @@ impl App {
         match (key.code, self.selected_id()) {
             (KeyCode::Esc, _) if !self.filter.is_empty() => self.set_filter(String::new()),
             (KeyCode::Char('q') | KeyCode::Esc, _) => self.quit = true,
+            (KeyCode::Char('?'), _) => self.mode = Mode::Help,
             (KeyCode::Char('/'), _) => {
                 self.mode = Mode::Input {
                     target: Target::Search,
