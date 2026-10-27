@@ -29,7 +29,10 @@ pub struct List {
 
 impl Default for List {
     fn default() -> Self {
-        Self { next_id: 1, items: Vec::new() }
+        Self {
+            next_id: 1,
+            items: Vec::new(),
+        }
     }
 }
 
@@ -54,7 +57,11 @@ impl Status {
 
 impl List {
     pub fn filtered(&self, status: Status) -> Vec<Item> {
-        self.items.iter().filter(|i| status.matches(i)).cloned().collect()
+        self.items
+            .iter()
+            .filter(|i| status.matches(i))
+            .cloned()
+            .collect()
     }
 
     pub fn get(&self, id: u64) -> Option<&Item> {
@@ -62,7 +69,11 @@ impl List {
     }
 
     pub fn add(&mut self, text: &str) -> Result<Item> {
-        let item = Item { id: self.next_id, text: clean(text)?, done: false };
+        let item = Item {
+            id: self.next_id,
+            text: clean(text)?,
+            done: false,
+        };
         self.next_id += 1;
         self.items.push(item.clone());
         Ok(item)
@@ -131,7 +142,12 @@ impl List {
 
 /// Items are single lines: newlines are folded into spaces and the ends trimmed.
 fn clean(text: &str) -> Result<String> {
-    let text = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ");
+    let text = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
     if text.is_empty() {
         bail!("item text is empty");
     }
@@ -153,7 +169,8 @@ impl Store {
     pub fn default_path() -> Result<PathBuf> {
         let base = match std::env::var_os("XDG_DATA_HOME") {
             Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-            _ => PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?).join(".local/share"),
+            _ => PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?)
+                .join(".local/share"),
         };
         Ok(base.join("todo").join("todo.json"))
     }
@@ -182,7 +199,11 @@ impl Store {
         if let Some(dir) = self.path.parent() {
             fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         }
-        let lock = OpenOptions::new().create(true).truncate(false).write(true).open(self.sibling(".lock"))?;
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.sibling(".lock"))?;
         lock.lock()?; // released when `lock` is dropped
 
         let mut list = self.load()?;
