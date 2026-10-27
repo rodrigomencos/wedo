@@ -17,12 +17,9 @@ use ratatui::{DefaultTerminal, Frame};
 use unicode_width::UnicodeWidthStr;
 
 use crate::store::{List, Store};
+use crate::theme::{ACCENT, Theme};
 
 const POLL: Duration = Duration::from_millis(250);
-
-// Only ANSI palette slots, never RGB, so the terminal's theme decides the actual colors.
-const ACCENT: Color = Color::Blue;
-const MUTED: Color = Color::DarkGray;
 
 const HELP: &[(&str, &str)] = &[
     ("space", "toggle"),
@@ -52,6 +49,7 @@ enum Action {
 
 pub fn run(store: Store) -> Result<()> {
     let mut app = App {
+        theme: Theme::detect(),
         store,
         list: List::default(),
         seen: None,
@@ -72,6 +70,7 @@ struct App {
     state: ListState,
     mode: Mode,
     error: Option<String>,
+    theme: Theme,
     quit: bool,
 }
 
@@ -238,13 +237,14 @@ impl App {
 
         let done = self.list.items.iter().filter(|i| i.done).count();
         let all_done = done > 0 && done == self.list.items.len();
-        // Titles inherit the border's color unless they set their own.
+        // Titles inherit the border's dim style unless they opt out.
         let block = Block::bordered()
-            .border_style(Style::new().fg(MUTED))
-            .title(Line::from(" todo ").bold().fg(ACCENT))
+            .border_style(Style::new().dim())
+            .title(Line::from(" todo ").bold().not_dim().fg(ACCENT))
             .title(
                 Line::from(format!(" {done}/{} ", self.list.items.len()))
                     .fg(if all_done { Color::Green } else { Color::Reset })
+                    .not_dim()
                     .right_aligned(),
             )
             .title_bottom(Line::from(format!(" {} ", tilde(self.store.path()))).right_aligned());
@@ -272,7 +272,6 @@ impl App {
                 } else {
                     (" ".into(), item.text.as_str().into())
                 };
-                // Dim rather than MUTED, which would vanish on the MUTED selection bar.
                 ListItem::new(Line::from(vec![
                     format!("{:>id_width$} [", item.id).dim(),
                     mark,
@@ -284,7 +283,7 @@ impl App {
                 .block(block)
                 .highlight_symbol(Line::from("› ").fg(ACCENT))
                 .highlight_spacing(HighlightSpacing::Always)
-                .highlight_style(Style::new().bold().bg(MUTED));
+                .highlight_style(self.theme.selected);
             frame.render_stateful_widget(list, main, &mut self.state);
         }
 
@@ -327,6 +326,7 @@ impl App {
             },
         };
         frame.render_widget(line, footer);
+        self.theme.finish(frame);
     }
 }
 

@@ -1,5 +1,6 @@
 mod mcp;
 mod store;
+mod theme;
 mod tui;
 
 use std::path::PathBuf;
