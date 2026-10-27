@@ -14,12 +14,14 @@ use ratatui::widgets::{
     Block, HighlightSpacing, List as ListWidget, ListItem, ListState, Paragraph,
 };
 use ratatui::{DefaultTerminal, Frame};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::store::{List, Lists, Store};
 use crate::theme::{ACCENT, Theme};
 
 const POLL: Duration = Duration::from_millis(250);
+
+const HIGHLIGHT_SYMBOL: &str = "› ";
 
 const HELP: &[(&str, &str)] = &[
     ("space", "toggle"),
@@ -305,22 +307,33 @@ impl App {
                 .map(|i| i.id.to_string().len())
                 .max()
                 .unwrap_or(1);
+            // "<id> [x] ", then the text; wrapped lines are indented to line up under it.
+            let prefix_width = id_width + 5;
+            let borders = 2;
+            let text_width = (main.width as usize)
+                .saturating_sub(borders + HIGHLIGHT_SYMBOL.width() + prefix_width)
+                .max(1);
+            let indent = " ".repeat(prefix_width);
             let rows = self.list.items.iter().map(|item| {
-                let (mark, text) = if item.done {
-                    ("✓".green(), item.text.as_str().dim().crossed_out())
+                let (mark, style) = if item.done {
+                    ("✓".green(), Style::new().dim().crossed_out())
                 } else {
-                    (" ".into(), item.text.as_str().into())
+                    (" ".into(), Style::new())
                 };
-                ListItem::new(Line::from(vec![
+                let mut lines = wrap(&item.text, text_width).into_iter();
+                let first = Line::from(vec![
                     format!("{:>id_width$} [", item.id).dim(),
                     mark,
                     "] ".dim(),
-                    text,
-                ]))
+                    Span::styled(lines.next().unwrap_or_default(), style),
+                ]);
+                let rest =
+                    lines.map(|l| Line::from(vec![indent.as_str().into(), Span::styled(l, style)]));
+                ListItem::new(std::iter::once(first).chain(rest).collect::<Vec<_>>())
             });
             let list = ListWidget::new(rows)
                 .block(block)
-                .highlight_symbol(Line::from("› ").fg(ACCENT))
+                .highlight_symbol(Line::from(HIGHLIGHT_SYMBOL).fg(ACCENT))
                 .highlight_spacing(HighlightSpacing::Always)
                 .highlight_style(self.theme.selected);
             frame.render_stateful_widget(list, main, &mut self.state);
@@ -431,6 +444,39 @@ impl Input {
     }
 }
 
+/// Splits `text` into lines at most `width` columns wide, breaking at the last space
+/// that fits, or mid-word when a single word is wider than the line.
+fn wrap(text: &str, width: usize) -> Vec<&str> {
+    let mut lines = Vec::new();
+    let mut rest = text;
+    while rest.width() > width {
+        // The longest prefix that fits, but at least one char so a narrow pane still progresses.
+        let mut end = 0;
+        let mut columns = 0;
+        for (i, c) in rest.char_indices() {
+            columns += c.width().unwrap_or(0);
+            if columns > width && i > 0 {
+                break;
+            }
+            end = i + c.len_utf8();
+        }
+        let cut = if rest[end..].starts_with(' ') {
+            end
+        } else {
+            rest[..end]
+                .rfind(' ')
+                .filter(|&space| space > 0)
+                .unwrap_or(end)
+        };
+        lines.push(rest[..cut].trim_end());
+        rest = rest[cut..].trim_start();
+    }
+    if !rest.is_empty() || lines.is_empty() {
+        lines.push(rest);
+    }
+    lines
+}
+
 fn tilde(path: &Path) -> String {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -438,5 +484,34 @@ fn tilde(path: &Path) -> String {
     match path.strip_prefix(&home) {
         Ok(rest) if !home.as_os_str().is_empty() => format!("~/{}", rest.display()),
         _ => path.display().to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wrap;
+
+    #[test]
+    fn wraps_at_spaces() {
+        assert_eq!(wrap("hello world foo", 11), ["hello world", "foo"]);
+        assert_eq!(wrap("abcd efgh", 4), ["abcd", "efgh"]);
+        assert_eq!(wrap("short", 10), ["short"]);
+        assert_eq!(wrap("", 5), [""]);
+    }
+
+    #[test]
+    fn breaks_words_that_dont_fit() {
+        assert_eq!(wrap("abcdefghij", 4), ["abcd", "efgh", "ij"]);
+        assert_eq!(
+            wrap("git add src/auth/*.rs", 10),
+            ["git add", "src/auth/*", ".rs"]
+        );
+    }
+
+    #[test]
+    fn counts_wide_characters_as_two_columns() {
+        assert_eq!(wrap("日本語のタスク", 6), ["日本語", "のタス", "ク"]);
+        // Narrower than one character: still one per line, never stuck.
+        assert_eq!(wrap("日本", 1), ["日", "本"]);
     }
 }
