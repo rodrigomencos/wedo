@@ -54,11 +54,15 @@ The list appears in the sidebar of any open TUI, or open it with `wedo -l auth-r
 
 ## The TUI
 
-`wedo` opens your default list and `wedo -l <name>` a named one. Press `?` inside for
-every key.
+`wedo` starts in the lists sidebar: `j` / `k` switch lists as you move, and `→` or
+`enter` goes into one. `wedo -l <name>` opens that list's items directly. Press `?`
+for every key.
+
+In a list:
 
 | Key | Action |
 | --- | --- |
+| `←` / `esc` | Back to the lists |
 | `j` `k` / `↓` `↑` | Move |
 | `g` `G` | First / last item |
 | `n` `N` | Next / previous unfinished item |
@@ -74,9 +78,10 @@ every key.
 | `/` | Search; `esc` clears it |
 | `y` | Copy the item's text |
 | `tab` `shift-tab` | Next / previous list |
-| `←` / `L` | Go to the lists sidebar. There, `j` `k` switch lists as you move, `→` or `enter` come back, `n` creates a list and `d` deletes one |
 | `m` | Turn the mouse off (to select text) or back on |
-| `q` / `esc` | Quit |
+| `q` | Quit |
+
+In the lists sidebar, `n` creates a list and `d` deletes one.
 
 While typing, `enter` saves, `esc` cancels, `ctrl-a` / `ctrl-e` jump to the start or
 end, and `ctrl-u` clears back to the start.
