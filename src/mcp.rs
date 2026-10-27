@@ -161,7 +161,7 @@ fn tools(default_list: &str) -> Value {
     let mut tools = json!([
         {
             "name": "list_items",
-            "description": "List checklist items top to bottom. Each has an id (its position, starting at 1), its text and a done flag.",
+            "description": "List checklist items top to bottom. Each has an id (its position, starting at 1), its text and a done flag. Items whose text starts with \"# \" are section headings, not tasks; with a status filter, a heading is listed only if its section has matches.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -172,7 +172,7 @@ fn tools(default_list: &str) -> Value {
         },
         {
             "name": "add_items",
-            "description": "Add items to the checklist, at the end or after a given item. Returns the new items with their ids.",
+            "description": "Add items to the checklist, at the end or after a given item. Text starting with \"# \" (e.g. \"# Deploy\") makes a section heading; use `after` to add items under one. Returns the new items with their ids.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -184,7 +184,7 @@ fn tools(default_list: &str) -> Value {
         },
         {
             "name": "set_done",
-            "description": "Check items off, or uncheck them with done=false. Fails without changing anything if any id is unknown.",
+            "description": "Check items off, or uncheck them with done=false. Fails without changing anything if any id is unknown or is a section heading.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

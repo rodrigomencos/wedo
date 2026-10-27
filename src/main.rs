@@ -155,6 +155,9 @@ fn print_lists(lists: &Lists, json: bool) -> Result<()> {
 }
 
 fn row(item: &Item) -> String {
+    if item.is_heading() {
+        return format!("    {:>3}  {}", item.id, item.text);
+    }
     format!(
         "[{}] {:>3}  {}",
         if item.done { 'x' } else { ' ' },

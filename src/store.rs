@@ -31,6 +31,17 @@ pub struct List {
     pub items: Vec<Item>,
 }
 
+impl Item {
+    /// Items written as `# Title` are section headings: structure, not tasks.
+    pub fn is_heading(&self) -> bool {
+        self.text.starts_with("# ")
+    }
+
+    pub fn heading_title(&self) -> &str {
+        self.text.trim_start_matches('#').trim()
+    }
+}
+
 impl Default for List {
     fn default() -> Self {
         Self {
@@ -60,12 +71,31 @@ impl Status {
 }
 
 impl List {
+    /// Items matching `status`, each kept under its section heading. When filtering,
+    /// headings are only included if their section has a match.
     pub fn filtered(&self, status: Status) -> Vec<Item> {
-        self.items
-            .iter()
-            .filter(|i| status.matches(i))
-            .cloned()
-            .collect()
+        if status == Status::All {
+            return self.items.clone();
+        }
+        let mut out = Vec::new();
+        let mut heading = None;
+        for item in &self.items {
+            if item.is_heading() {
+                heading = Some(item);
+            } else if status.matches(item) {
+                out.extend(heading.take().cloned());
+                out.push(item.clone());
+            }
+        }
+        out
+    }
+
+    /// (done, total) over the items that are tasks, not headings.
+    pub fn progress(&self) -> (usize, usize) {
+        let tasks = self.items.iter().filter(|i| !i.is_heading());
+        tasks.fold((0, 0), |(done, total), i| {
+            (done + usize::from(i.done), total + 1)
+        })
     }
 
     pub fn get(&self, id: u64) -> Option<&Item> {
@@ -105,6 +135,9 @@ impl List {
     /// Checks or unchecks every id, or none of them if any id is unknown.
     pub fn set_done(&mut self, ids: &[u64], done: bool) -> Result<Vec<Item>> {
         let indices = self.indices(ids)?;
+        for &i in &indices {
+            self.check_task(i)?;
+        }
         Ok(indices
             .into_iter()
             .map(|i| {
@@ -116,6 +149,7 @@ impl List {
 
     pub fn toggle(&mut self, id: u64) -> Result<Item> {
         let i = self.index(id)?;
+        self.check_task(i)?;
         self.items[i].done = !self.items[i].done;
         Ok(self.items[i].clone())
     }
@@ -151,6 +185,17 @@ impl List {
             item.id = id;
         }
         self.next_id = self.items.len() as u64 + 1;
+    }
+
+    fn check_task(&self, index: usize) -> Result<()> {
+        let item = &self.items[index];
+        if item.is_heading() {
+            bail!(
+                "item {} is a section heading and can't be checked off",
+                item.id
+            );
+        }
+        Ok(())
     }
 
     fn index(&self, id: u64) -> Result<usize> {
@@ -315,13 +360,8 @@ impl Lists {
         self.names()?
             .into_iter()
             .map(|name| {
-                let list = self.open(&name)?.load()?;
-                let done = list.items.iter().filter(|i| i.done).count();
-                Ok(Summary {
-                    name,
-                    done,
-                    total: list.items.len(),
-                })
+                let (done, total) = self.open(&name)?.load()?.progress();
+                Ok(Summary { name, done, total })
             })
             .collect()
     }
@@ -447,6 +487,33 @@ mod tests {
         let order: Vec<_> = list.items.iter().map(|i| i.text.as_str()).collect();
         assert_eq!(order, ["top", "a", "b", "c", "d"]);
         assert!(list.add_all(Some(99), &["x".into()]).is_err());
+    }
+
+    #[test]
+    fn headings_are_structure_not_tasks() {
+        let mut list = List::default();
+        let texts = ["# Setup", "a", "b", "# Ship", "c", "# Empty"].map(String::from);
+        list.add_all(None, &texts).unwrap();
+        list.set_done(&[2], true).unwrap();
+        assert_eq!(list.progress(), (1, 3));
+        assert!(list.toggle(1).is_err());
+        assert!(
+            list.set_done(&[2, 4], true).is_err(),
+            "all-or-nothing includes headings"
+        );
+        let pending: Vec<_> = list
+            .filtered(Status::Pending)
+            .into_iter()
+            .map(|i| i.text)
+            .collect();
+        assert_eq!(pending, ["# Setup", "b", "# Ship", "c"]);
+        let done: Vec<_> = list
+            .filtered(Status::Done)
+            .into_iter()
+            .map(|i| i.text)
+            .collect();
+        assert_eq!(done, ["# Setup", "a"]);
+        assert_eq!(list.items[0].heading_title(), "Setup");
     }
 
     #[test]

@@ -11,6 +11,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::wrap::wrap;
 use super::{Action, App, Mode, Target};
+use crate::store::Item;
 use crate::theme::ACCENT;
 
 const HIGHLIGHT_SYMBOL: &str = "› ";
@@ -30,8 +31,8 @@ impl App {
         let [main, footer] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
 
-        let done = self.list.items.iter().filter(|i| i.done).count();
-        let all_done = done > 0 && done == self.list.items.len();
+        let (done, total) = self.list.progress();
+        let all_done = done > 0 && done == total;
         // Titles inherit the border's dim style unless they opt out.
         let block = Block::bordered()
             .border_style(Style::new().dim())
@@ -42,7 +43,7 @@ impl App {
                     .fg(ACCENT),
             )
             .title(
-                Line::from(format!(" {done}/{} ", self.list.items.len()))
+                Line::from(format!(" {done}/{total} "))
                     .fg(if all_done { Color::Green } else { Color::Reset })
                     .not_dim()
                     .right_aligned(),
@@ -73,23 +74,40 @@ impl App {
                 .saturating_sub(borders + HIGHLIGHT_SYMBOL.width() + prefix_width)
                 .max(1);
             let indent = " ".repeat(prefix_width);
-            let rows = self.list.items.iter().map(|item| {
-                let (mark, style) = if item.done {
-                    ("✓".green(), Style::new().dim().crossed_out())
-                } else {
-                    (" ".into(), Style::new())
-                };
-                let mut lines = wrap(&item.text, text_width).into_iter();
-                let first = Line::from(vec![
-                    format!("{:>id_width$} [", item.id).dim(),
-                    mark,
-                    "] ".dim(),
-                    Span::styled(lines.next().unwrap_or_default(), style),
-                ]);
-                let rest =
-                    lines.map(|l| Line::from(vec![indent.as_str().into(), Span::styled(l, style)]));
-                ListItem::new(std::iter::once(first).chain(rest).collect::<Vec<_>>())
-            });
+            let sections = section_progress(&self.list.items);
+            // Headings start where the checkbox would, so they stand out from their items.
+            let heading_width = text_width + prefix_width - (id_width + 1);
+            let rows = self
+                .list
+                .items
+                .iter()
+                .zip(&sections)
+                .map(|(item, &(done, total))| {
+                    if item.is_heading() {
+                        return ListItem::new(heading_lines(
+                            item,
+                            id_width,
+                            heading_width,
+                            done,
+                            total,
+                        ));
+                    }
+                    let (mark, style) = if item.done {
+                        ("✓".green(), Style::new().dim().crossed_out())
+                    } else {
+                        (" ".into(), Style::new())
+                    };
+                    let mut lines = wrap(&item.text, text_width).into_iter();
+                    let first = Line::from(vec![
+                        format!("{:>id_width$} [", item.id).dim(),
+                        mark,
+                        "] ".dim(),
+                        Span::styled(lines.next().unwrap_or_default(), style),
+                    ]);
+                    let rest = lines
+                        .map(|l| Line::from(vec![indent.as_str().into(), Span::styled(l, style)]));
+                    ListItem::new(std::iter::once(first).chain(rest).collect::<Vec<_>>())
+                });
             let list = ListWidget::new(rows)
                 .block(block)
                 .highlight_symbol(Line::from(HIGHLIGHT_SYMBOL).fg(ACCENT))
@@ -139,6 +157,57 @@ impl App {
         frame.render_widget(line, footer);
         self.theme.finish(frame);
     }
+}
+
+/// A heading as `<id> Title ────── done/total`, or wrapped without the rule when it's too long.
+fn heading_lines(
+    item: &Item,
+    id_width: usize,
+    width: usize,
+    done: usize,
+    total: usize,
+) -> Vec<Line<'_>> {
+    let number = format!("{:>id_width$} ", item.id).dim();
+    let title = item.heading_title();
+    let progress = format!(" {done}/{total}");
+    let rule = width.saturating_sub(title.width() + 1 + progress.width());
+    if rule >= 2 {
+        return vec![Line::from(vec![
+            number,
+            title.bold(),
+            " ".into(),
+            "─".repeat(rule).dim(),
+            progress.dim(),
+        ])];
+    }
+    let indent = " ".repeat(id_width + 1);
+    wrap(title, width)
+        .into_iter()
+        .enumerate()
+        .map(|(i, part)| {
+            let lead = if i == 0 {
+                number.clone()
+            } else {
+                indent.clone().into()
+            };
+            Line::from(vec![lead, part.bold()])
+        })
+        .collect()
+}
+
+/// For each heading's index, the (done, total) of the items under it until the next heading.
+fn section_progress(items: &[Item]) -> Vec<(usize, usize)> {
+    let mut sections = vec![(0, 0); items.len()];
+    let mut heading = None;
+    for (i, item) in items.iter().enumerate() {
+        if item.is_heading() {
+            heading = Some(i);
+        } else if let Some(h) = heading {
+            sections[h].0 += usize::from(item.done);
+            sections[h].1 += 1;
+        }
+    }
+    sections
 }
 
 fn tilde(path: &Path) -> String {
