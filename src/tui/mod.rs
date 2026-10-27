@@ -10,11 +10,18 @@ mod view;
 mod wrap;
 
 use std::collections::HashMap;
+use std::io;
+use std::ops::Range;
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Result;
 use ratatui::DefaultTerminal;
-use ratatui::crossterm::event::{self, KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+    MouseButton, MouseEvent, MouseEventKind,
+};
+use ratatui::crossterm::execute;
+use ratatui::layout::{Position, Rect};
 use ratatui::widgets::ListState;
 
 use crate::store::{DEFAULT_LIST, Item, List, Lists, Store, Summary};
@@ -79,6 +86,10 @@ pub fn run(store: Store, lists: Option<Lists>) -> Result<()> {
         undo: Vec::new(),
         sidebar: Vec::new(),
         lists_seen: None,
+        mouse: true,
+        rows_at: Vec::new(),
+        checkbox: 0..0,
+        sidebar_area: None,
         rows: Vec::new(),
         hide_done: false,
         filter: String::new(),
@@ -106,6 +117,13 @@ struct App {
     sidebar: Vec<Summary>,
     /// mtime of the lists directory when `sidebar` was read.
     lists_seen: Option<SystemTime>,
+    /// Whether mouse clicks and scrolling are captured (`m` toggles).
+    mouse: bool,
+    /// Where the last frame drew each row (screen lines, row index), for clicks.
+    rows_at: Vec<(Range<u16>, usize)>,
+    /// The screen columns of the checkboxes.
+    checkbox: Range<u16>,
+    sidebar_area: Option<Rect>,
     /// Indices into `list.items` of the rows on screen, top to bottom.
     rows: Vec<usize>,
     hide_done: bool,
@@ -125,11 +143,16 @@ struct App {
 
 impl App {
     fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
+        let _mouse_off = MouseGuard;
+        self.set_mouse(self.mouse);
         while !self.quit {
             terminal.draw(|frame| self.draw(frame))?;
             if event::poll(POLL)? {
-                if let Some(key) = event::read()?.as_key_press_event() {
+                let event = event::read()?;
+                if let Some(key) = event.as_key_press_event() {
                     self.on_key(key);
+                } else if let Event::Mouse(mouse) = event {
+                    self.on_mouse(mouse);
                 }
             }
             if self.store.modified() != self.seen {
@@ -140,6 +163,67 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    fn set_mouse(&mut self, on: bool) {
+        let result = if on {
+            execute!(io::stdout(), EnableMouseCapture)
+        } else {
+            execute!(io::stdout(), DisableMouseCapture)
+        };
+        match result {
+            Ok(()) => self.mouse = on,
+            Err(e) => self.error = Some(format!("couldn't change mouse mode: {e}")),
+        }
+    }
+
+    fn on_mouse(&mut self, mouse: MouseEvent) {
+        if !matches!(self.mode, Mode::Normal) {
+            return;
+        }
+        self.error = None;
+        let row = self.state.selected().unwrap_or(0);
+        let at = Position {
+            x: mouse.column,
+            y: mouse.row,
+        };
+        match mouse.kind {
+            MouseEventKind::ScrollDown => self.select(row + 1),
+            MouseEventKind::ScrollUp => self.select(row.saturating_sub(1)),
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(area) = self.sidebar_area.filter(|a| a.contains(at)) {
+                    // Below the border, one list per line.
+                    let index = (at.y - area.y).checked_sub(1).map(usize::from);
+                    if let Some(name) = index
+                        .and_then(|i| self.sidebar.get(i))
+                        .map(|s| s.name.clone())
+                    {
+                        self.open_list(&name);
+                    }
+                    return;
+                }
+                let clicked = self.rows_at.iter().find(|(lines, _)| lines.contains(&at.y));
+                if let Some(&(_, row)) = clicked {
+                    self.select(row);
+                    if self.checkbox.contains(&at.x) {
+                        self.toggle_selected();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn toggle_selected(&mut self) {
+        let Some(id) = self.selected_id() else { return };
+        let (index, item) = (id as usize - 1, self.list.items[id as usize - 1].clone());
+        if self.apply(|l| l.toggle(id)).is_some() {
+            self.push_undo(Undo::SetDone {
+                index,
+                text: item.text,
+                done: item.done,
+            });
+        }
     }
 
     fn reload(&mut self) {
@@ -422,15 +506,15 @@ impl App {
             (KeyCode::Char('c'), _) if self.list.items.iter().any(|i| i.done) => {
                 self.mode = Mode::Confirm(Action::ClearDone)
             }
-            (KeyCode::Char(' ') | KeyCode::Enter, Some(id)) => {
-                let (index, item) = (id as usize - 1, self.list.items[id as usize - 1].clone());
-                if self.apply(|l| l.toggle(id)).is_some() {
-                    self.push_undo(Undo::SetDone {
-                        index,
-                        text: item.text,
-                        done: item.done,
-                    });
-                }
+            (KeyCode::Char(' ') | KeyCode::Enter, Some(_)) => self.toggle_selected(),
+            (KeyCode::Char('m'), _) => {
+                self.set_mouse(!self.mouse);
+                let notice = if self.mouse {
+                    "mouse on: click to select or check; hold shift to select text"
+                } else {
+                    "mouse off: select text as usual"
+                };
+                self.notice = Some((notice.into(), Instant::now()));
             }
             (KeyCode::Char('u'), _) => self.undo_last(),
             (KeyCode::Char('e'), Some(id)) => {
@@ -574,6 +658,15 @@ impl App {
                 self.notice = Some((format!("deleted list {name}"), Instant::now()));
             }
         }
+    }
+}
+
+/// Turns mouse capture off however the TUI exits, panics included.
+struct MouseGuard;
+
+impl Drop for MouseGuard {
+    fn drop(&mut self) {
+        let _ = execute!(io::stdout(), DisableMouseCapture);
     }
 }
 

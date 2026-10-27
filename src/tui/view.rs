@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
@@ -62,6 +62,7 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
             ("h", "hide or show finished items"),
             ("/", "search; esc clears it"),
             ("y", "copy the item's text"),
+            ("m", "turn the mouse off (to select text) or on"),
             ("q esc", "quit"),
         ],
     ),
@@ -78,10 +79,15 @@ impl App {
                     Layout::horizontal([Constraint::Length(width), Constraint::Fill(1)])
                         .areas(body);
                 self.draw_sidebar(frame, side);
+                self.sidebar_area = Some(side);
                 main
             }
-            None => body,
+            None => {
+                self.sidebar_area = None;
+                body
+            }
         };
+        self.rows_at.clear();
 
         let (done, total) = self.list.progress();
         let all_done = done > 0 && done == total;
@@ -143,50 +149,65 @@ impl App {
             let sections = section_progress(items);
             // Headings start where the checkbox would, so they stand out from their items.
             let heading_width = text_width + prefix_width - (id_width + 1);
-            let rows =
-                self.rows
-                    .iter()
-                    .map(|&i| (&items[i], sections[i]))
-                    .map(|(item, (done, total))| {
-                        if item.is_heading() {
-                            return ListItem::new(heading_lines(
-                                item,
-                                id_width,
-                                heading_width,
-                                done,
-                                total,
-                            ));
-                        }
-                        let (mark, mut style) = if item.done {
-                            ("✓".green(), Style::new().dim().crossed_out())
-                        } else {
-                            (" ".into(), Style::new())
-                        };
-                        // Just changed by someone else: color it until the highlight fades.
-                        let fresh = self.recent.contains_key(&item.text);
-                        let mut number = Style::new().dim();
-                        if fresh {
-                            style = style.fg(ACCENT).bold();
-                            number = Style::new().fg(ACCENT).bold();
-                        }
-                        let mut lines = wrap(&item.text, text_width).into_iter();
-                        let first = Line::from(vec![
-                            Span::styled(format!("{:>id_width$} [", item.id), number),
-                            mark,
-                            "] ".dim(),
-                            Span::styled(lines.next().unwrap_or_default(), style),
-                        ]);
-                        let rest = lines.map(|l| {
-                            Line::from(vec![indent.as_str().into(), Span::styled(l, style)])
-                        });
-                        ListItem::new(std::iter::once(first).chain(rest).collect::<Vec<_>>())
-                    });
+            let rows = self
+                .rows
+                .iter()
+                .map(|&i| (&items[i], sections[i]))
+                .map(|(item, (done, total))| {
+                    if item.is_heading() {
+                        return ListItem::new(heading_lines(
+                            item,
+                            id_width,
+                            heading_width,
+                            done,
+                            total,
+                        ));
+                    }
+                    let (mark, mut style) = if item.done {
+                        ("✓".green(), Style::new().dim().crossed_out())
+                    } else {
+                        (" ".into(), Style::new())
+                    };
+                    // Just changed by someone else: color it until the highlight fades.
+                    let fresh = self.recent.contains_key(&item.text);
+                    let mut number = Style::new().dim();
+                    if fresh {
+                        style = style.fg(ACCENT).bold();
+                        number = Style::new().fg(ACCENT).bold();
+                    }
+                    let mut lines = wrap(&item.text, text_width).into_iter();
+                    let first = Line::from(vec![
+                        Span::styled(format!("{:>id_width$} [", item.id), number),
+                        mark,
+                        "] ".dim(),
+                        Span::styled(lines.next().unwrap_or_default(), style),
+                    ]);
+                    let rest = lines
+                        .map(|l| Line::from(vec![indent.as_str().into(), Span::styled(l, style)]));
+                    ListItem::new(std::iter::once(first).chain(rest).collect::<Vec<_>>())
+                })
+                .collect::<Vec<_>>();
+            let heights: Vec<u16> = rows.iter().map(|r| r.height() as u16).collect();
             let list = ListWidget::new(rows)
                 .block(block)
                 .highlight_symbol(Line::from(HIGHLIGHT_SYMBOL).fg(ACCENT))
                 .highlight_spacing(HighlightSpacing::Always)
                 .highlight_style(self.theme.selected);
             frame.render_stateful_widget(list, main, &mut self.state);
+
+            // Remember where rows landed (the list scrolls itself) so clicks can find them.
+            let inner = main.inner(Margin::new(1, 1));
+            let mut y = inner.y;
+            for (row, &height) in heights.iter().enumerate().skip(self.state.offset()) {
+                if y >= inner.bottom() {
+                    break;
+                }
+                let end = (y + height).min(inner.bottom());
+                self.rows_at.push((y..end, row));
+                y = end;
+            }
+            let x = inner.x + (HIGHLIGHT_SYMBOL.width() + id_width + 1) as u16;
+            self.checkbox = x..x + 3;
         }
 
         let line = match &self.mode {
@@ -371,6 +392,9 @@ fn draw_help(frame: &mut Frame) {
         }
     }
     lines.push(Line::default());
+    lines.push(Line::from(
+        "Click to select, click a checkbox to check it, scroll to move.".dim(),
+    ));
     lines.push(Line::from(vec![
         "Items written as ".dim(),
         "# Title".bold(),
