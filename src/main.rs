@@ -1,3 +1,4 @@
+mod mcp;
 mod store;
 mod tui;
 
@@ -61,6 +62,8 @@ enum Command {
     },
     /// Delete every finished item
     Clear,
+    /// Serve the checklist to agents as an MCP server over stdio
+    Mcp,
 }
 
 fn main() -> Result<()> {
@@ -93,6 +96,7 @@ fn main() -> Result<()> {
         Command::Edit { id, text } => (Some("edited"), vec![store.update(|l| l.edit(id, &text))?]),
         Command::Rm { ids } => (Some("removed"), store.update(|l| l.remove(&ids))?),
         Command::Clear => (Some("removed"), store.update(|l| Ok(l.clear_done()))?),
+        Command::Mcp => return mcp::serve(&store),
     };
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&items)?);
