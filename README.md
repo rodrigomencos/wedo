@@ -31,6 +31,14 @@ Run `todo` with no arguments.
 While typing an item: `enter` saves, `esc` cancels, `ctrl-a` / `ctrl-e` jump to the
 start / end, `ctrl-u` clears back to the start.
 
+### Colors
+
+The TUI has no color scheme of its own; it uses your terminal's theme. Text uses
+the theme's palette (blue as the accent, green for checked items), and secondary
+text is dimmed. The selection bar is a tint of your terminal's background,
+read from the terminal at startup when it supports truecolor and color queries;
+otherwise the selected row is shown in reverse video. `NO_COLOR` is respected.
+
 ## The CLI
 
 ```sh
