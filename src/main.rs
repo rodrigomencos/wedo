@@ -15,12 +15,12 @@ use unicode_width::UnicodeWidthStr;
 #[derive(Parser)]
 #[command(version)]
 struct Cli {
-    /// Named list to use, kept in $XDG_DATA_HOME/todo or ~/.local/share/todo
-    /// [env: TODO_LIST] [default: default]
+    /// Named list to use, kept in $XDG_DATA_HOME/wedo or ~/.local/share/wedo
+    /// [env: WEDO_LIST] [default: default]
     #[arg(short, long, global = true)]
     list: Option<String>,
 
-    /// Use this file instead of a named list [env: TODO_FILE]
+    /// Use this file instead of a named list [env: WEDO_FILE]
     #[arg(short, long, global = true, conflicts_with = "list")]
     file: Option<PathBuf>,
 
@@ -44,7 +44,7 @@ enum Command {
         #[arg(long)]
         done: bool,
     },
-    /// Add items, one per argument: todo add "buy milk" "call mom"
+    /// Add items, one per argument: wedo add "buy milk" "call mom"
     Add {
         #[arg(required = true)]
         texts: Vec<String>,
@@ -78,18 +78,18 @@ enum Command {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let lists = Lists::new(Lists::default_dir()?);
-    // Either flag beats both variables, so a stray TODO_FILE can't block --list.
+    // Either flag beats both variables, so a stray WEDO_FILE can't block --list.
     let env = |name| std::env::var(name).ok().filter(|v| !v.is_empty());
     let file = match (cli.file, &cli.list) {
         (Some(path), _) => Some(path),
         (None, Some(_)) => None,
-        (None, None) => env("TODO_FILE").map(PathBuf::from),
+        (None, None) => env("WEDO_FILE").map(PathBuf::from),
     };
     let store = match &file {
         Some(path) => Store::new(path.clone()),
         None => lists.open(
             &cli.list
-                .or_else(|| env("TODO_LIST"))
+                .or_else(|| env("WEDO_LIST"))
                 .unwrap_or(DEFAULT_LIST.into()),
         )?,
     };

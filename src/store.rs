@@ -243,14 +243,14 @@ impl Lists {
         Self { dir }
     }
 
-    /// `$XDG_DATA_HOME/todo`, falling back to `~/.local/share/todo`.
+    /// `$XDG_DATA_HOME/wedo`, falling back to `~/.local/share/wedo`.
     pub fn default_dir() -> Result<PathBuf> {
         let base = match std::env::var_os("XDG_DATA_HOME") {
             Some(dir) if !dir.is_empty() => PathBuf::from(dir),
             _ => PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?)
                 .join(".local/share"),
         };
-        Ok(base.join("todo"))
+        Ok(base.join("wedo"))
     }
 
     /// The list called `name`. Its file is created on the first write.
@@ -309,9 +309,9 @@ mod tests {
     use super::*;
 
     fn temp_store(name: &str) -> Store {
-        let dir = std::env::temp_dir().join(format!("todo-test-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("wedo-test-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        Store::new(dir.join("todo.json"))
+        Store::new(dir.join("list.json"))
     }
 
     #[test]

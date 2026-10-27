@@ -17,7 +17,7 @@ Item ids are stable and never reused; call list_items to find them. \
 Prefer checking items off over removing them so the user can see what was done. \
 To track the work of a session or task, keep it in its own list: pass a short kebab-case \
 `list` name such as \"auth-refactor\" (created on first write) and tell the user they can \
-watch it with `todo --list <name>`.";
+watch it with `wedo --list <name>`.";
 
 /// `default` is the list used when a tool call doesn't name one.
 pub fn serve(lists: &Lists, default: &Store) -> Result<()> {
@@ -49,7 +49,7 @@ fn handle(lists: &Lists, default: &Store, message: &Value) -> Option<Value> {
         "initialize" => json!({
             "protocolVersion": params["protocolVersion"].as_str().unwrap_or(FALLBACK_PROTOCOL_VERSION),
             "capabilities": { "tools": {} },
-            "serverInfo": { "name": "todo", "version": env!("CARGO_PKG_VERSION") },
+            "serverInfo": { "name": "wedo", "version": env!("CARGO_PKG_VERSION") },
             "instructions": INSTRUCTIONS,
         }),
         "ping" => json!({}),

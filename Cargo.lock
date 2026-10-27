@@ -1618,19 +1618,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e1c906769ad99c88eaa54e728060edef082f8e358ff32030cb7c7d315e81109"
 
 [[package]]
-name = "todo"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "ratatui",
- "serde",
- "serde_json",
- "terminal-colorsaurus",
- "unicode-width",
-]
-
-[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1762,6 +1749,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23f0c9c52aa7cd7d77769a4cfe2a9adb1b331f489a41d912ce14513d5ab995c6"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "wedo"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "terminal-colorsaurus",
+ "unicode-width",
 ]
 
 [[package]]
