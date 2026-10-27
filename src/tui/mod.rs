@@ -35,6 +35,8 @@ enum Target {
     /// A new item that will end up at this index.
     Add(usize),
     Edit(u64),
+    /// The search filter, applied as it's typed.
+    Search,
 }
 
 #[derive(Clone, Copy)]
@@ -52,6 +54,7 @@ pub fn run(store: Store, lists: Option<Lists>) -> Result<()> {
         list: List::default(),
         rows: Vec::new(),
         hide_done: false,
+        filter: String::new(),
         seen: None,
         state: ListState::default(),
         mode: Mode::Normal,
@@ -70,6 +73,8 @@ struct App {
     /// Indices into `list.items` of the rows on screen, top to bottom.
     rows: Vec<usize>,
     hide_done: bool,
+    /// Only items containing this text (ignoring case) are shown.
+    filter: String,
     /// mtime of the file when `list` was loaded.
     seen: Option<SystemTime>,
     /// The selected row (an index into `rows`, not into the list).
@@ -119,7 +124,8 @@ impl App {
     /// one with the same text nearest its old position. Numbers shift, so ids won't do.
     fn refresh_rows(&mut self, anchor: Option<(usize, String)>) {
         let row = self.state.selected().unwrap_or(0);
-        self.rows = visible_rows(&self.list.items, |item| self.shows(item), false);
+        let searching = !self.filter.is_empty();
+        self.rows = visible_rows(&self.list.items, |item| self.shows(item), searching);
         let found = anchor.and_then(|(index, text)| {
             let rows = self.rows.iter().enumerate();
             rows.filter(|&(_, &i)| self.list.items[i].text == text)
@@ -130,7 +136,18 @@ impl App {
     }
 
     fn shows(&self, item: &Item) -> bool {
-        !(self.hide_done && item.done)
+        let matches = self.filter.is_empty()
+            || item
+                .text
+                .to_lowercase()
+                .contains(&self.filter.to_lowercase());
+        matches && !(self.hide_done && item.done)
+    }
+
+    fn set_filter(&mut self, filter: String) {
+        let anchor = self.anchor();
+        self.filter = filter;
+        self.refresh_rows(anchor);
     }
 
     /// Runs a change against the file, then reloads to pick up anything else that changed.
@@ -226,11 +243,15 @@ impl App {
         self.notice = None;
         match std::mem::replace(&mut self.mode, Mode::Normal) {
             Mode::Normal => self.on_normal_key(key),
-            Mode::Input { target, mut input } => match key.code {
-                KeyCode::Esc => {}
-                KeyCode::Enter => self.submit(target, &input.text),
+            Mode::Input { target, mut input } => match (key.code, target) {
+                (KeyCode::Esc, Target::Search) => self.set_filter(String::new()),
+                (KeyCode::Esc, _) => {}
+                (KeyCode::Enter, _) => self.submit(target, &input.text),
                 _ => {
                     input.on_key(key);
+                    if let Target::Search = target {
+                        self.set_filter(input.text.clone());
+                    }
                     self.mode = Mode::Input { target, input };
                 }
             },
@@ -249,7 +270,14 @@ impl App {
         let row = self.state.selected().unwrap_or(0);
         let index = self.selected_index();
         match (key.code, self.selected_id()) {
+            (KeyCode::Esc, _) if !self.filter.is_empty() => self.set_filter(String::new()),
             (KeyCode::Char('q') | KeyCode::Esc, _) => self.quit = true,
+            (KeyCode::Char('/'), _) => {
+                self.mode = Mode::Input {
+                    target: Target::Search,
+                    input: Input::new(self.filter.clone()),
+                }
+            }
             (KeyCode::Char('j') | KeyCode::Down, _) => self.select(row + 1),
             (KeyCode::Char('k') | KeyCode::Up, _) => self.select(row.saturating_sub(1)),
             (KeyCode::Char('g') | KeyCode::Home, _) => self.select(0),
@@ -314,6 +342,8 @@ impl App {
             return;
         }
         match target {
+            // Already applied while typing.
+            Target::Search => {}
             Target::Edit(id) => {
                 self.apply(|l| l.edit(id, text));
             }

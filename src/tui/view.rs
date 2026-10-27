@@ -24,6 +24,7 @@ const HELP: &[(&str, &str)] = &[
     ("J/K", "move"),
     ("c", "clear done"),
     ("h", "hide done"),
+    ("/", "search"),
     ("n/N", "next open"),
     ("q", "quit"),
 ];
@@ -35,6 +36,13 @@ impl App {
 
         let (done, total) = self.list.progress();
         let all_done = done > 0 && done == total;
+        let mut status = format!(" {done}/{total} ");
+        if self.hide_done {
+            status.push_str("· done hidden ");
+        }
+        if !self.filter.is_empty() {
+            status.push_str(&format!("· /{} ", self.filter));
+        }
         // Titles inherit the border's dim style unless they opt out.
         let block = Block::bordered()
             .border_style(Style::new().dim())
@@ -45,23 +53,18 @@ impl App {
                     .fg(ACCENT),
             )
             .title(
-                Line::from(format!(
-                    " {done}/{total}{} ",
-                    if self.hide_done {
-                        " · done hidden"
-                    } else {
-                        ""
-                    }
-                ))
-                .fg(if all_done { Color::Green } else { Color::Reset })
-                .not_dim()
-                .right_aligned(),
+                Line::from(status)
+                    .fg(if all_done { Color::Green } else { Color::Reset })
+                    .not_dim()
+                    .right_aligned(),
             )
             .title_bottom(Line::from(format!(" {} ", tilde(self.store.path()))).right_aligned());
 
         if self.rows.is_empty() {
             let (before, key, after) = if self.list.items.is_empty() {
                 ("Nothing to do. Press ", "a", " to add an item.")
+            } else if !self.filter.is_empty() {
+                ("Nothing matches. Press ", "esc", " to clear the search.")
             } else {
                 ("Everything's done. Press ", "h", " to show finished items.")
             };
@@ -135,6 +138,7 @@ impl App {
                 let prompt = match target {
                     Target::Add(_) => "add › ",
                     Target::Edit(_) => "edit › ",
+                    Target::Search => "search › ",
                 };
                 let available = (footer.width as usize).saturating_sub(prompt.width() + 1);
                 let (visible, cursor_x) = input.view(available);
