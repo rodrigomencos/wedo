@@ -347,6 +347,11 @@ impl Lists {
         Ok(base.join("wedo"))
     }
 
+    /// When any list was last written (each write renames a file into the directory).
+    pub fn modified(&self) -> Option<SystemTime> {
+        fs::metadata(&self.dir).and_then(|m| m.modified()).ok()
+    }
+
     /// The list called `name`. Its file is created on the first write.
     pub fn open(&self, name: &str) -> Result<Store> {
         check_name(name)?;
@@ -367,6 +372,20 @@ impl Lists {
             .collect();
         names.sort();
         Ok(names)
+    }
+
+    /// Deletes a list's file, and with it every item.
+    pub fn delete(&self, name: &str) -> Result<()> {
+        let store = self.open(name)?;
+        for path in [store.path().to_path_buf(), store.sibling(".lock")] {
+            match fs::remove_file(&path) {
+                Err(e) if e.kind() != io::ErrorKind::NotFound => {
+                    return Err(e).with_context(|| format!("deleting {}", path.display()));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     pub fn summaries(&self) -> Result<Vec<Summary>> {
@@ -577,6 +596,9 @@ mod tests {
         assert_eq!(lists.names().unwrap(), ["a", "b"]);
         let totals: Vec<_> = lists.summaries().unwrap().iter().map(|s| s.total).collect();
         assert_eq!(totals, [0, 1]);
+        lists.delete("a").unwrap();
+        lists.delete("never-existed").unwrap();
+        assert_eq!(lists.names().unwrap(), ["b"]);
     }
 
     #[test]

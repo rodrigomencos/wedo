@@ -3,17 +3,18 @@
 use std::path::{Path, PathBuf};
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, Clear, HighlightSpacing, List as ListWidget, ListItem, Padding, Paragraph,
+    Block, Clear, HighlightSpacing, List as ListWidget, ListItem, ListState, Padding, Paragraph,
 };
 use unicode_width::UnicodeWidthStr;
 
 use super::wrap::wrap;
 use super::{Action, App, HIGHLIGHT_FOR, Mode, Target};
 use crate::store::Item;
+use crate::store::Summary;
 use crate::theme::ACCENT;
 
 const HIGHLIGHT_SYMBOL: &str = "› ";
@@ -39,6 +40,7 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
             ("g G", "first and last item"),
             ("n N", "next and previous unfinished item"),
             ("tab shift-tab", "next and previous list"),
+            ("L", "go to the lists sidebar: open, create, delete"),
         ],
     ),
     (
@@ -68,8 +70,18 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
 impl App {
     pub(super) fn draw(&mut self, frame: &mut Frame) {
         self.recent.retain(|_, at| at.elapsed() < HIGHLIGHT_FOR);
-        let [main, footer] =
+        let [body, footer] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
+        let main = match self.sidebar_width(body.width) {
+            Some(width) => {
+                let [side, main] =
+                    Layout::horizontal([Constraint::Length(width), Constraint::Fill(1)])
+                        .areas(body);
+                self.draw_sidebar(frame, side);
+                main
+            }
+            None => body,
+        };
 
         let (done, total) = self.list.progress();
         let all_done = done > 0 && done == total;
@@ -183,6 +195,7 @@ impl App {
                     Target::Add(_) => "add › ",
                     Target::Edit(_) => "edit › ",
                     Target::Search => "search › ",
+                    Target::NewList => "new list › ",
                 };
                 let available = (footer.width as usize).saturating_sub(prompt.width() + 1);
                 let (visible, cursor_x) = input.view(available);
@@ -202,6 +215,16 @@ impl App {
                 Line::from(format!("delete {done} finished items? (y/N)")).yellow()
             }
             Mode::Help => Line::from("press any key to close").dim(),
+            Mode::Confirm(Action::DeleteList(name)) => Line::from(format!(
+                "delete the list \"{name}\" and all its items? (y/N)"
+            ))
+            .yellow(),
+            Mode::Lists { .. } => key_hints(&[
+                ("enter", "open"),
+                ("n", "new"),
+                ("d", "delete"),
+                ("esc", "close"),
+            ]),
             Mode::Normal => match (&self.error, &self.notice) {
                 (Some(error), _) => Line::from(error.as_str()).red(),
                 (None, Some((notice, at))) if at.elapsed() < HIGHLIGHT_FOR => {
@@ -210,7 +233,6 @@ impl App {
                 _ => Line::from(
                     FOOTER
                         .iter()
-                        .chain(self.lists.is_some().then_some(&("tab", "lists")))
                         .flat_map(|(key, what)| {
                             [
                                 Span::from(*key).bold().fg(ACCENT),
@@ -227,6 +249,103 @@ impl App {
         }
         self.theme.finish(frame);
     }
+}
+
+impl App {
+    /// The sidebar's width, or None to hide it: no other lists to show, or too narrow.
+    fn sidebar_width(&self, total: u16) -> Option<u16> {
+        let focused = matches!(self.mode, Mode::Lists { .. });
+        if self.lists.is_none() || (self.sidebar.len() < 2 && !focused) || total < 60 {
+            return None;
+        }
+        let widest = self
+            .sidebar
+            .iter()
+            .map(|s| s.name.width() + 1 + progress(s).width())
+            .max();
+        let chrome = 2 + HIGHLIGHT_SYMBOL.width();
+        Some(((widest.unwrap_or(0) + chrome) as u16).clamp(16, total / 3))
+    }
+
+    /// Every list with its progress. Focused (`L`), it has a cursor; otherwise it
+    /// just marks the list on screen.
+    fn draw_sidebar(&mut self, frame: &mut Frame, area: Rect) {
+        let current = self.store.name();
+        let room = (area.width as usize).saturating_sub(2 + HIGHLIGHT_SYMBOL.width());
+        let rows: Vec<ListItem> = self
+            .sidebar
+            .iter()
+            .map(|s| {
+                let progress = progress(s);
+                let name = truncate(&s.name, room.saturating_sub(progress.width() + 1));
+                let pad = " ".repeat(room.saturating_sub(name.width() + progress.width()));
+                let name_style = if s.name == current {
+                    Style::new().fg(ACCENT).bold()
+                } else {
+                    Style::new()
+                };
+                let progress_style = if s.total > 0 && s.done == s.total {
+                    Style::new().green()
+                } else {
+                    Style::new().dim()
+                };
+                ListItem::new(Line::from(vec![
+                    Span::styled(name, name_style),
+                    pad.into(),
+                    Span::styled(progress, progress_style),
+                ]))
+            })
+            .collect();
+        let focused = matches!(self.mode, Mode::Lists { .. });
+        let block = Block::bordered()
+            .border_style(if focused {
+                Style::new().fg(ACCENT)
+            } else {
+                Style::new().dim()
+            })
+            .title(Line::from(" lists ").bold().not_dim().fg(ACCENT))
+            .title_bottom(Line::from(if focused { "" } else { " L " }).right_aligned());
+        let list = ListWidget::new(rows)
+            .block(block)
+            .highlight_symbol(Line::from(HIGHLIGHT_SYMBOL).fg(ACCENT))
+            .highlight_spacing(HighlightSpacing::Always);
+        let mut marker = ListState::default().with_selected(self.current_in_sidebar());
+        match &mut self.mode {
+            Mode::Lists { state } => {
+                frame.render_stateful_widget(list.highlight_style(self.theme.selected), area, state)
+            }
+            _ => frame.render_stateful_widget(list, area, &mut marker),
+        }
+    }
+}
+
+fn progress(summary: &Summary) -> String {
+    format!("{}/{}", summary.done, summary.total)
+}
+
+/// Cuts `text` to `width` columns, ending in … when it had to cut.
+fn truncate(text: &str, width: usize) -> String {
+    if text.width() <= width {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    for c in text.chars() {
+        if out.width() + c.to_string().width() + 1 > width {
+            break;
+        }
+        out.push(c);
+    }
+    out + "…"
+}
+
+fn key_hints(keys: &[(&str, &str)]) -> Line<'static> {
+    let spans = keys.iter().flat_map(|(key, what)| {
+        [
+            Span::from(key.to_string()).bold().fg(ACCENT),
+            Span::from(format!(" {what}  ")).dim(),
+        ]
+    });
+    Line::from(spans.collect::<Vec<_>>())
 }
 
 fn draw_help(frame: &mut Frame) {
