@@ -14,7 +14,8 @@ This puts `todo` in `~/.cargo/bin`.
 
 ## The TUI
 
-Run `todo` with no arguments.
+Run `todo` with no arguments for your default list, or `todo -l <name>` for a named
+one.
 
 | Key | Action |
 | --- | --- |
@@ -26,6 +27,7 @@ Run `todo` with no arguments.
 | `d` | Delete the item (asks first) |
 | `J` / `K` | Move the item down / up |
 | `c` | Delete all finished items (asks first) |
+| `tab` / `shift-tab` | Switch to the next / previous list |
 | `q`, `esc` | Quit |
 
 While typing an item: `enter` saves, `esc` cancels, `ctrl-a` / `ctrl-e` jump to the
@@ -49,6 +51,16 @@ todo undo 2                     # uncheck
 todo edit 2 "call mom back"
 todo rm 1
 todo clear                      # delete all finished items
+todo lists                      # every list, with how many items are done
+```
+
+Every command works on the `default` list unless you pick another with
+`-l <name>` / `--list <name>`, or `TODO_LIST=<name>`. A list is created the first
+time something is written to it:
+
+```sh
+todo -l auth-refactor add "write migration" "update tests"
+todo -l auth-refactor done 1
 ```
 
 Add `--json` to any command for machine-readable output. Commands that take
@@ -60,7 +72,9 @@ command exits non-zero.
 ### MCP
 
 `todo mcp` runs an MCP server over stdio with these tools: `list_items`,
-`add_items`, `set_done`, `edit_item`, `remove_items` and `clear_done`.
+`add_items`, `set_done`, `edit_item`, `remove_items`, `clear_done` and
+`list_checklists`. Each item tool takes an optional `list` name, so one server
+covers every list.
 
 Claude Code:
 
@@ -85,17 +99,27 @@ Any agent with a shell can use the CLI directly. Something like this in a
 `CLAUDE.md` / `AGENTS.md` is enough:
 
 ```md
-My checklist is managed with the `todo` command. Use `todo --json ls` to read it,
+My checklists are managed with the `todo` command. Use `todo --json ls` to read one,
 `todo add "..."` to add items and `todo done <id>` to check them off. Ids are stable.
+Pick a list with `-l <name>`; `todo lists` shows them all.
 ```
 
-## Where the list lives
+### A checklist per session
 
-`$XDG_DATA_HOME/todo/todo.json`, or `~/.local/share/todo/todo.json` when that isn't
-set. Point at another list with `--file path` or `TODO_FILE=path`; a separate file
-per project works fine.
+Ask the agent to track its work in a list of its own, for example: *"Keep a todo
+list called auth-refactor for this session and check items off as you go."* Through
+MCP it passes `list: "auth-refactor"`; through the CLI it runs
+`todo -l auth-refactor ...`. Watch it with `todo -l auth-refactor`, or `tab` to it from
+any open TUI.
 
-It's plain JSON, so you can edit it by hand. Every write takes a lock on
-`todo.json.lock`, re-reads the file, applies the change and atomically renames a
+## Where lists live
+
+Each list is `<name>.json` in `$XDG_DATA_HOME/todo/`, or `~/.local/share/todo/` when
+that isn't set. Names can use letters, digits, `-`, `_` and `.`. To use a file
+anywhere else, pass `--file path` or set `TODO_FILE=path` instead of a list name.
+Flags beat environment variables.
+
+Lists are plain JSON, so you can edit them by hand. Every write takes a lock on
+`<name>.json.lock`, re-reads the file, applies the change and atomically renames a
 temp file into place. The TUI, the CLI and any number of agents can write at once
 without losing each other's changes.
