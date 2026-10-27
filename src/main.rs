@@ -8,14 +8,20 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-use store::{Item, Status, Store};
+use store::{DEFAULT_LIST, Item, Lists, Status, Store};
+use unicode_width::UnicodeWidthStr;
 
 /// A checklist for you and your agents. Run without a command to open the TUI.
 #[derive(Parser)]
 #[command(version)]
 struct Cli {
-    /// Checklist file [default: $XDG_DATA_HOME/todo/todo.json or ~/.local/share/todo/todo.json]
-    #[arg(short, long, global = true, env = "TODO_FILE")]
+    /// Named list to use, kept in $XDG_DATA_HOME/todo or ~/.local/share/todo
+    /// [env: TODO_LIST] [default: default]
+    #[arg(short, long, global = true)]
+    list: Option<String>,
+
+    /// Use this file instead of a named list [env: TODO_FILE]
+    #[arg(short, long, global = true, conflicts_with = "list")]
     file: Option<PathBuf>,
 
     /// Print JSON instead of text
@@ -63,18 +69,33 @@ enum Command {
     },
     /// Delete every finished item
     Clear,
+    /// Show every named list and how far along it is
+    Lists,
     /// Serve the checklist to agents as an MCP server over stdio
     Mcp,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let store = Store::new(match cli.file {
-        Some(path) => path,
-        None => Store::default_path()?,
-    });
+    let lists = Lists::new(Lists::default_dir()?);
+    // Either flag beats both variables, so a stray TODO_FILE can't block --list.
+    let env = |name| std::env::var(name).ok().filter(|v| !v.is_empty());
+    let file = match (cli.file, &cli.list) {
+        (Some(path), _) => Some(path),
+        (None, Some(_)) => None,
+        (None, None) => env("TODO_FILE").map(PathBuf::from),
+    };
+    let store = match &file {
+        Some(path) => Store::new(path.clone()),
+        None => lists.open(
+            &cli.list
+                .or_else(|| env("TODO_LIST"))
+                .unwrap_or(DEFAULT_LIST.into()),
+        )?,
+    };
     let Some(command) = cli.command else {
-        return tui::run(store);
+        // A --file list stands alone; named lists can be switched between.
+        return tui::run(store, file.is_none().then_some(lists));
     };
     let (verb, items) = match command {
         Command::List { pending, done } => {
@@ -97,7 +118,8 @@ fn main() -> Result<()> {
         Command::Edit { id, text } => (Some("edited"), vec![store.update(|l| l.edit(id, &text))?]),
         Command::Rm { ids } => (Some("removed"), store.update(|l| l.remove(&ids))?),
         Command::Clear => (Some("removed"), store.update(|l| Ok(l.clear_done()))?),
-        Command::Mcp => return mcp::serve(&store),
+        Command::Lists => return print_lists(&lists, cli.json),
+        Command::Mcp => return mcp::serve(&lists, &store),
     };
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&items)?);
@@ -109,6 +131,22 @@ fn main() -> Result<()> {
                 Some(verb) => println!("{verb} {}", row(item)),
                 None => println!("{}", row(item)),
             }
+        }
+    }
+    Ok(())
+}
+
+fn print_lists(lists: &Lists, json: bool) -> Result<()> {
+    let summaries = lists.summaries()?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&summaries)?);
+    } else if summaries.is_empty() {
+        println!("no lists yet");
+    } else {
+        let width = summaries.iter().map(|s| s.name.width()).max().unwrap_or(0);
+        for s in &summaries {
+            let pad = " ".repeat(width - s.name.width());
+            println!("{}{pad}  {}/{}", s.name, s.done, s.total);
         }
     }
     Ok(())

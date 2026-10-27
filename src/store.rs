@@ -165,18 +165,16 @@ impl Store {
         Self { path }
     }
 
-    /// `$XDG_DATA_HOME/todo/todo.json`, falling back to `~/.local/share/todo/todo.json`.
-    pub fn default_path() -> Result<PathBuf> {
-        let base = match std::env::var_os("XDG_DATA_HOME") {
-            Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-            _ => PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?)
-                .join(".local/share"),
-        };
-        Ok(base.join("todo").join("todo.json"))
-    }
-
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// The file name without `.json`, which for a named list is its name.
+    pub fn name(&self) -> String {
+        self.path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default()
     }
 
     /// A missing or empty file is an empty list.
@@ -226,6 +224,86 @@ impl Store {
     }
 }
 
+pub const DEFAULT_LIST: &str = "default";
+
+/// A directory of named lists, one `<name>.json` file each.
+pub struct Lists {
+    dir: PathBuf,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Summary {
+    pub name: String,
+    pub done: usize,
+    pub total: usize,
+}
+
+impl Lists {
+    pub fn new(dir: PathBuf) -> Self {
+        Self { dir }
+    }
+
+    /// `$XDG_DATA_HOME/todo`, falling back to `~/.local/share/todo`.
+    pub fn default_dir() -> Result<PathBuf> {
+        let base = match std::env::var_os("XDG_DATA_HOME") {
+            Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+            _ => PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?)
+                .join(".local/share"),
+        };
+        Ok(base.join("todo"))
+    }
+
+    /// The list called `name`. Its file is created on the first write.
+    pub fn open(&self, name: &str) -> Result<Store> {
+        check_name(name)?;
+        Ok(Store::new(self.dir.join(format!("{name}.json"))))
+    }
+
+    /// The names of every list that has been written to, sorted.
+    pub fn names(&self) -> Result<Vec<String>> {
+        let entries = match fs::read_dir(&self.dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e).with_context(|| format!("reading {}", self.dir.display())),
+        };
+        let mut names: Vec<String> = entries
+            .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+            .filter_map(|file| Some(file.strip_suffix(".json")?.to_owned()))
+            .filter(|name| check_name(name).is_ok())
+            .collect();
+        names.sort();
+        Ok(names)
+    }
+
+    pub fn summaries(&self) -> Result<Vec<Summary>> {
+        self.names()?
+            .into_iter()
+            .map(|name| {
+                let list = self.open(&name)?.load()?;
+                let done = list.items.iter().filter(|i| i.done).count();
+                Ok(Summary {
+                    name,
+                    done,
+                    total: list.items.len(),
+                })
+            })
+            .collect()
+    }
+}
+
+/// List names become file names, and agents choose them, so keep them to one safe path component.
+fn check_name(name: &str) -> Result<()> {
+    let safe = name
+        .chars()
+        .all(|c| c.is_alphanumeric() || "-_.".contains(c));
+    if name.is_empty() || name.starts_with('.') || !safe {
+        bail!(
+            "invalid list name {name:?}: use letters, digits, '-', '_' and '.', not starting with '.'"
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,6 +349,44 @@ mod tests {
         list.move_by(3, -10).unwrap();
         let order: Vec<_> = list.items.iter().map(|i| i.text.as_str()).collect();
         assert_eq!(order, ["c", "b", "a"]);
+    }
+
+    #[test]
+    fn list_names_stay_inside_the_directory() {
+        let lists = Lists::new(PathBuf::from("/lists"));
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../etc/passwd",
+            "a/b",
+            ".hidden",
+            "a b",
+            "a\0b",
+        ] {
+            assert!(lists.open(bad).is_err(), "{bad:?} should be rejected");
+        }
+        for good in ["default", "auth-refactor", "v1.2_notes", "買い物"] {
+            assert_eq!(lists.open(good).unwrap().name(), good);
+        }
+    }
+
+    #[test]
+    fn names_lists_only_checklist_files() {
+        let store = temp_store("names");
+        let dir = store.path().parent().unwrap().to_path_buf();
+        let lists = Lists::new(dir.clone());
+        assert!(lists.names().unwrap().is_empty());
+        lists.open("b").unwrap().update(|l| l.add("x")).unwrap();
+        lists
+            .open("a")
+            .unwrap()
+            .update(|l| Ok(l.clear_done()))
+            .unwrap();
+        fs::write(dir.join("notes.txt"), "").unwrap();
+        assert_eq!(lists.names().unwrap(), ["a", "b"]);
+        let totals: Vec<_> = lists.summaries().unwrap().iter().map(|s| s.total).collect();
+        assert_eq!(totals, [0, 1]);
     }
 
     #[test]

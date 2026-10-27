@@ -8,15 +8,19 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use crate::store::{Status, Store};
+use crate::store::{Lists, Status, Store};
 
 const FALLBACK_PROTOCOL_VERSION: &str = "2025-06-18";
 
-const INSTRUCTIONS: &str = "A checklist shared with the user, who watches it live in a terminal UI. \
+const INSTRUCTIONS: &str = "Checklists shared with the user, who watches them live in a terminal UI. \
 Item ids are stable and never reused; call list_items to find them. \
-Prefer checking items off over removing them so the user can see what was done.";
+Prefer checking items off over removing them so the user can see what was done. \
+To track the work of a session or task, keep it in its own list: pass a short kebab-case \
+`list` name such as \"auth-refactor\" (created on first write) and tell the user they can \
+watch it with `todo --list <name>`.";
 
-pub fn serve(store: &Store) -> Result<()> {
+/// `default` is the list used when a tool call doesn't name one.
+pub fn serve(lists: &Lists, default: &Store) -> Result<()> {
     let mut stdout = io::stdout().lock();
     for line in io::stdin().lock().lines() {
         let line = line?;
@@ -24,7 +28,7 @@ pub fn serve(store: &Store) -> Result<()> {
             continue;
         }
         let reply = match serde_json::from_str::<Value>(&line) {
-            Ok(message) => handle(store, &message),
+            Ok(message) => handle(lists, default, &message),
             Err(e) => Some(error(Value::Null, -32700, &format!("parse error: {e}"))),
         };
         if let Some(reply) = reply {
@@ -37,7 +41,7 @@ pub fn serve(store: &Store) -> Result<()> {
 }
 
 /// Answers a request. Notifications (no id) and stray responses (no method) get no reply.
-fn handle(store: &Store, message: &Value) -> Option<Value> {
+fn handle(lists: &Lists, default: &Store, message: &Value) -> Option<Value> {
     let id = message.get("id")?.clone();
     let method = message.get("method")?.as_str()?;
     let params = message.get("params").cloned().unwrap_or_else(|| json!({}));
@@ -49,14 +53,14 @@ fn handle(store: &Store, message: &Value) -> Option<Value> {
             "instructions": INSTRUCTIONS,
         }),
         "ping" => json!({}),
-        "tools/list" => json!({ "tools": tools() }),
+        "tools/list" => json!({ "tools": tools(&default.name()) }),
         "tools/call" => {
             let name = params["name"].as_str().unwrap_or_default();
             let args = params
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            match call(store, name, args) {
+            match call(lists, default, name, args) {
                 Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
                 Err(e) => {
                     json!({ "content": [{ "type": "text", "text": format!("{e:#}") }], "isError": true })
@@ -101,7 +105,16 @@ struct RemoveArgs {
 }
 
 /// Runs a tool and returns the affected items as pretty JSON.
-fn call(store: &Store, name: &str, args: Value) -> Result<String> {
+fn call(lists: &Lists, default: &Store, name: &str, args: Value) -> Result<String> {
+    if name == "list_checklists" {
+        return Ok(serde_json::to_string_pretty(&lists.summaries()?)?);
+    }
+    let named = match args.get("list") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(list)) => Some(lists.open(list)?),
+        Some(_) => bail!("invalid arguments: list must be a string"),
+    };
+    let store = named.as_ref().unwrap_or(default);
     let items = match name {
         "list_items" => {
             let a: ListArgs = parse(args)?;
@@ -136,9 +149,9 @@ fn parse<T: DeserializeOwned>(args: Value) -> Result<T> {
     serde_json::from_value(args).context("invalid arguments")
 }
 
-fn tools() -> Value {
+fn tools(default_list: &str) -> Value {
     let ids = json!({ "type": "array", "items": { "type": "integer" }, "minItems": 1 });
-    json!([
+    let mut tools = json!([
         {
             "name": "list_items",
             "description": "List checklist items in display order. Each item has an id, its text and a done flag.",
@@ -194,5 +207,21 @@ fn tools() -> Value {
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": { "destructiveHint": true },
         },
-    ])
+    ]);
+    // Every item tool can target any list.
+    let list = json!({
+        "type": "string",
+        "description": format!("Name of the checklist, e.g. \"auth-refactor\" (default \"{default_list}\"). A new name creates the list on first write."),
+    });
+    let items = tools.as_array_mut().expect("tools is a JSON array");
+    for tool in items.iter_mut() {
+        tool["inputSchema"]["properties"]["list"] = list.clone();
+    }
+    items.push(json!({
+        "name": "list_checklists",
+        "description": "List every checklist by name, with how many of its items are done.",
+        "inputSchema": { "type": "object", "properties": {} },
+        "annotations": { "readOnlyHint": true },
+    }));
+    tools
 }

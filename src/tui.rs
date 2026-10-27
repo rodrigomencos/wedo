@@ -16,7 +16,7 @@ use ratatui::widgets::{
 use ratatui::{DefaultTerminal, Frame};
 use unicode_width::UnicodeWidthStr;
 
-use crate::store::{List, Store};
+use crate::store::{List, Lists, Store};
 use crate::theme::{ACCENT, Theme};
 
 const POLL: Duration = Duration::from_millis(250);
@@ -47,10 +47,12 @@ enum Action {
     ClearDone,
 }
 
-pub fn run(store: Store) -> Result<()> {
+/// `lists` is the directory `store` belongs to, if `tab` may switch to its other lists.
+pub fn run(store: Store, lists: Option<Lists>) -> Result<()> {
     let mut app = App {
         theme: Theme::detect(),
         store,
+        lists,
         list: List::default(),
         seen: None,
         state: ListState::default(),
@@ -64,6 +66,7 @@ pub fn run(store: Store) -> Result<()> {
 
 struct App {
     store: Store,
+    lists: Option<Lists>,
     list: List,
     /// mtime of the file when `list` was loaded.
     seen: Option<SystemTime>,
@@ -113,6 +116,35 @@ impl App {
                 self.error = Some(format!("{e:#}"));
                 None
             }
+        }
+    }
+
+    /// Moves `step` lists forward or back through the directory, wrapping around.
+    fn switch_list(&mut self, step: isize) {
+        let Some(lists) = &self.lists else { return };
+        let current = self.store.name();
+        let mut names = match lists.names() {
+            Ok(names) => names,
+            Err(e) => {
+                self.error = Some(format!("{e:#}"));
+                return;
+            }
+        };
+        // The current list may have no file yet.
+        if !names.contains(&current) {
+            names.push(current.clone());
+            names.sort();
+        }
+        let index = names.iter().position(|n| *n == current).unwrap_or(0);
+        let next = (index as isize + step).rem_euclid(names.len() as isize) as usize;
+        match lists.open(&names[next]) {
+            Ok(store) => {
+                self.store = store;
+                // Ids are per list, so don't carry the selection over.
+                self.state = ListState::default();
+                self.reload();
+            }
+            Err(e) => self.error = Some(format!("{e:#}")),
         }
     }
 
@@ -176,6 +208,8 @@ impl App {
                     input: Input::default(),
                 }
             }
+            (KeyCode::Tab, _) => self.switch_list(1),
+            (KeyCode::BackTab, _) => self.switch_list(-1),
             (KeyCode::Char('c'), _) if self.list.items.iter().any(|i| i.done) => {
                 self.mode = Mode::Confirm(Action::ClearDone)
             }
@@ -240,7 +274,12 @@ impl App {
         // Titles inherit the border's dim style unless they opt out.
         let block = Block::bordered()
             .border_style(Style::new().dim())
-            .title(Line::from(" todo ").bold().not_dim().fg(ACCENT))
+            .title(
+                Line::from(format!(" {} ", self.store.name()))
+                    .bold()
+                    .not_dim()
+                    .fg(ACCENT),
+            )
             .title(
                 Line::from(format!(" {done}/{} ", self.list.items.len()))
                     .fg(if all_done { Color::Green } else { Color::Reset })
@@ -315,6 +354,7 @@ impl App {
                 Some(error) => Line::from(error.as_str()).red(),
                 None => Line::from(
                     HELP.iter()
+                        .chain(self.lists.is_some().then_some(&("tab", "lists")))
                         .flat_map(|(key, what)| {
                             [
                                 Span::from(*key).bold().fg(ACCENT),
