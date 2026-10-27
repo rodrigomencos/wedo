@@ -21,8 +21,21 @@ To track the work of a session or task, keep it in its own list: pass a short ke
 `list` name such as \"auth-refactor\" (created on first write) and tell the user they can \
 watch it with `wedo --list <name>`.";
 
+struct Server<'a> {
+    lists: &'a Lists,
+    /// The list used when a tool call doesn't name one.
+    default: &'a Store,
+    /// The client's name from `initialize`, recorded as the author of its changes.
+    client: String,
+}
+
 /// `default` is the list used when a tool call doesn't name one.
 pub fn serve(lists: &Lists, default: &Store) -> Result<()> {
+    let mut server = Server {
+        lists,
+        default,
+        client: "agent".into(),
+    };
     let mut stdout = io::stdout().lock();
     for line in io::stdin().lock().lines() {
         let line = line?;
@@ -30,7 +43,7 @@ pub fn serve(lists: &Lists, default: &Store) -> Result<()> {
             continue;
         }
         let reply = match serde_json::from_str::<Value>(&line) {
-            Ok(message) => handle(lists, default, &message),
+            Ok(message) => handle(&mut server, &message),
             Err(e) => Some(error(Value::Null, -32700, &format!("parse error: {e}"))),
         };
         if let Some(reply) = reply {
@@ -43,26 +56,31 @@ pub fn serve(lists: &Lists, default: &Store) -> Result<()> {
 }
 
 /// Answers a request. Notifications (no id) and stray responses (no method) get no reply.
-fn handle(lists: &Lists, default: &Store, message: &Value) -> Option<Value> {
+fn handle(server: &mut Server, message: &Value) -> Option<Value> {
     let id = message.get("id")?.clone();
     let method = message.get("method")?.as_str()?;
     let params = message.get("params").cloned().unwrap_or_else(|| json!({}));
     let result = match method {
-        "initialize" => json!({
+        "initialize" => {
+            if let Some(name) = params["clientInfo"]["name"].as_str() {
+                server.client = name.to_string();
+            }
+            json!({
             "protocolVersion": params["protocolVersion"].as_str().unwrap_or(FALLBACK_PROTOCOL_VERSION),
             "capabilities": { "tools": {} },
             "serverInfo": { "name": "wedo", "version": env!("CARGO_PKG_VERSION") },
             "instructions": INSTRUCTIONS,
-        }),
+            })
+        }
         "ping" => json!({}),
-        "tools/list" => json!({ "tools": tools(&default.name()) }),
+        "tools/list" => json!({ "tools": tools(&server.default.name()) }),
         "tools/call" => {
             let name = params["name"].as_str().unwrap_or_default();
             let args = params
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            match call(lists, default, name, args) {
+            match call(server, name, args) {
                 Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
                 Err(e) => {
                     json!({ "content": [{ "type": "text", "text": format!("{e:#}") }], "isError": true })
@@ -108,16 +126,16 @@ struct RemoveArgs {
 }
 
 /// Runs a tool and returns the affected items as pretty JSON.
-fn call(lists: &Lists, default: &Store, name: &str, args: Value) -> Result<String> {
+fn call(server: &Server, name: &str, args: Value) -> Result<String> {
     if name == "list_checklists" {
-        return Ok(serde_json::to_string_pretty(&lists.summaries()?)?);
+        return Ok(serde_json::to_string_pretty(&server.lists.summaries()?)?);
     }
-    let named = match args.get("list") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(list)) => Some(lists.open(list)?),
+    let store = match args.get("list") {
+        None | Some(Value::Null) => server.default.clone(),
+        Some(Value::String(list)) => server.lists.open(list)?,
         Some(_) => bail!("invalid arguments: list must be a string"),
-    };
-    let store = named.as_ref().unwrap_or(default);
+    }
+    .with_author(&server.client);
     let items = match name {
         "list_items" => {
             let a: ListArgs = parse(args)?;

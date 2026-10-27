@@ -10,7 +10,7 @@ use ratatui::widgets::{Block, HighlightSpacing, List as ListWidget, ListItem, Pa
 use unicode_width::UnicodeWidthStr;
 
 use super::wrap::wrap;
-use super::{Action, App, Mode, Target};
+use super::{Action, App, HIGHLIGHT_FOR, Mode, Target};
 use crate::store::Item;
 use crate::theme::ACCENT;
 
@@ -31,6 +31,7 @@ const HELP: &[(&str, &str)] = &[
 
 impl App {
     pub(super) fn draw(&mut self, frame: &mut Frame) {
+        self.recent.retain(|_, at| at.elapsed() < HIGHLIGHT_FOR);
         let [main, footer] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
 
@@ -108,14 +109,21 @@ impl App {
                                 total,
                             ));
                         }
-                        let (mark, style) = if item.done {
+                        let (mark, mut style) = if item.done {
                             ("✓".green(), Style::new().dim().crossed_out())
                         } else {
                             (" ".into(), Style::new())
                         };
+                        // Just changed by someone else: color it until the highlight fades.
+                        let fresh = self.recent.contains_key(&item.text);
+                        let mut number = Style::new().dim();
+                        if fresh {
+                            style = style.fg(ACCENT).bold();
+                            number = Style::new().fg(ACCENT).bold();
+                        }
                         let mut lines = wrap(&item.text, text_width).into_iter();
                         let first = Line::from(vec![
-                            format!("{:>id_width$} [", item.id).dim(),
+                            Span::styled(format!("{:>id_width$} [", item.id), number),
                             mark,
                             "] ".dim(),
                             Span::styled(lines.next().unwrap_or_default(), style),
@@ -159,8 +167,10 @@ impl App {
             }
             Mode::Normal => match (&self.error, &self.notice) {
                 (Some(error), _) => Line::from(error.as_str()).red(),
-                (None, Some(notice)) => Line::from(notice.as_str()).fg(ACCENT),
-                (None, None) => Line::from(
+                (None, Some((notice, at))) if at.elapsed() < HIGHLIGHT_FOR => {
+                    Line::from(notice.as_str()).fg(ACCENT)
+                }
+                _ => Line::from(
                     HELP.iter()
                         .chain(self.lists.is_some().then_some(&("tab", "lists")))
                         .flat_map(|(key, what)| {

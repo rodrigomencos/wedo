@@ -2,11 +2,13 @@
 //! show up live, and routes every edit through `Store::update` so it never
 //! overwrites theirs.
 
+mod changes;
 mod input;
 mod view;
 mod wrap;
 
-use std::time::{Duration, SystemTime};
+use std::collections::HashMap;
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Result;
 use ratatui::DefaultTerminal;
@@ -16,9 +18,16 @@ use ratatui::widgets::ListState;
 use crate::store::{Item, List, Lists, Store};
 use crate::theme::Theme;
 
+use changes::Changes;
 use input::Input;
 
 const POLL: Duration = Duration::from_millis(250);
+
+/// How long changes made elsewhere stay highlighted, and notices stay in the footer.
+const HIGHLIGHT_FOR: Duration = Duration::from_secs(6);
+
+/// Recorded as the author of changes made in the TUI.
+const AUTHOR: &str = "you";
 
 enum Mode {
     Normal,
@@ -49,9 +58,10 @@ enum Action {
 pub fn run(store: Store, lists: Option<Lists>) -> Result<()> {
     let mut app = App {
         theme: Theme::detect(),
-        store,
+        store: store.with_author(AUTHOR),
         lists,
         list: List::default(),
+        recent: HashMap::new(),
         rows: Vec::new(),
         hide_done: false,
         filter: String::new(),
@@ -70,6 +80,8 @@ struct App {
     store: Store,
     lists: Option<Lists>,
     list: List,
+    /// Texts of items someone else just changed, and when we noticed.
+    recent: HashMap<String, Instant>,
     /// Indices into `list.items` of the rows on screen, top to bottom.
     rows: Vec<usize>,
     hide_done: bool,
@@ -81,8 +93,8 @@ struct App {
     state: ListState,
     mode: Mode,
     error: Option<String>,
-    /// A message for the footer that isn't an error.
-    notice: Option<String>,
+    /// A message for the footer that isn't an error, and when it was posted.
+    notice: Option<(String, Instant)>,
     theme: Theme,
     quit: bool,
 }
@@ -97,7 +109,7 @@ impl App {
                 }
             }
             if self.store.modified() != self.seen {
-                self.reload();
+                self.reload_external();
             }
         }
         Ok(())
@@ -112,6 +124,21 @@ impl App {
             Err(e) => self.error = Some(format!("{e:#}")),
         }
         self.refresh_rows(anchor);
+    }
+
+    /// Reloads after someone else wrote the file, and points out what they changed.
+    fn reload_external(&mut self) {
+        let old = self.list.items.clone();
+        self.reload();
+        let changes = Changes::between(&old, &self.list.items);
+        if changes.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        for text in changes.touched() {
+            self.recent.insert(text.clone(), now);
+        }
+        self.notice = Some((changes.summary(self.list.changed_by.as_deref()), now));
     }
 
     /// The selected item's position and text, to find it again after the list changes.
@@ -183,7 +210,8 @@ impl App {
         let next = (index as isize + step).rem_euclid(names.len() as isize) as usize;
         match lists.open(&names[next]) {
             Ok(store) => {
-                self.store = store;
+                self.store = store.with_author(AUTHOR);
+                self.recent.clear();
                 // Ids are per list, so don't carry the selection over.
                 self.state = ListState::default();
                 self.reload();
@@ -229,7 +257,7 @@ impl App {
             Some(row) => self.select(row),
             None => {
                 let direction = if forward { "below" } else { "above" };
-                self.notice = Some(format!("no open items {direction}"));
+                self.notice = Some((format!("no open items {direction}"), Instant::now()));
             }
         }
     }

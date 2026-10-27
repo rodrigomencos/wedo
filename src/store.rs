@@ -29,6 +29,9 @@ pub struct List {
     #[serde(default)]
     pub next_id: u64,
     pub items: Vec<Item>,
+    /// Who made the last change: an MCP client's name, `cli`, or `you` in the TUI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_by: Option<String>,
 }
 
 impl Item {
@@ -47,6 +50,7 @@ impl Default for List {
         Self {
             next_id: 1,
             items: Vec::new(),
+            changed_by: None,
         }
     }
 }
@@ -230,15 +234,23 @@ fn clean(text: &str) -> Result<String> {
     Ok(text)
 }
 
+#[derive(Clone)]
 pub struct Store {
     path: PathBuf,
+    author: Option<String>,
 }
 
 impl Store {
     pub fn new(path: PathBuf) -> Self {
         // Resolve symlinks so the atomic rename replaces the real file, not the link.
         let path = fs::canonicalize(&path).unwrap_or(path);
-        Self { path }
+        Self { path, author: None }
+    }
+
+    /// Records `author` as `changed_by` on every write through this store.
+    pub fn with_author(mut self, author: impl Into<String>) -> Self {
+        self.author = Some(author.into());
+        self
     }
 
     pub fn path(&self) -> &Path {
@@ -287,6 +299,7 @@ impl Store {
         let mut list = self.load()?;
         let out = f(&mut list)?;
         list.renumber();
+        list.changed_by.clone_from(&self.author);
 
         let mut json = serde_json::to_vec_pretty(&list)?;
         json.push(b'\n');

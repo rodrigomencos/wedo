@@ -88,6 +88,7 @@ fn main() -> Result<()> {
         (None, Some(_)) => None,
         (None, None) => env("WEDO_FILE").map(PathBuf::from),
     };
+    let author = env("WEDO_AUTHOR").unwrap_or("cli".into());
     let store = match &file {
         Some(path) => Store::new(path.clone()),
         None => lists.open(
@@ -95,7 +96,8 @@ fn main() -> Result<()> {
                 .or_else(|| env("WEDO_LIST"))
                 .unwrap_or(DEFAULT_LIST.into()),
         )?,
-    };
+    }
+    .with_author(author);
     let Some(command) = cli.command else {
         // A --file list stands alone; named lists can be switched between.
         return tui::run(store, file.is_none().then_some(lists));
