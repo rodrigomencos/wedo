@@ -8,21 +8,7 @@ Claude Code, Codex, Cursor or any other agent reads and updates the same list, t
 MCP or the command line, and you watch their changes land live, highlighted, with who
 made them.
 
-```text
-┌ lists ────────────┐┌ auth-refactor ───────────────────────────────────── 2/6 ┐
-│› auth-refactor 2/6││  1 backend ───────────────────────────────────────── 2/4│
-│  default       0/2││  2 [✓] Add a sessions table                             │
-│  groceries     1/3││  3 [✓] Hash passwords with argon2                       │
-│                   ││› 4 [ ] Write the login handler                          │
-│                   ││  5 [ ] Rate-limit failed logins                         │
-│                   ││  6 tests ─────────────────────────────────────────── 0/2│
-│                   ││  7 [ ] Cover expired tokens                             │
-│                   ││  8 [ ] Cover the lockout after five failed attempts in a│
-│                   ││        row, including the reset after an hour           │
-│                   ││                                                         │
-└──────────────── L ┘└──────────────── ~/.local/share/wedo/auth-refactor.json ┘
-space check  a add  e edit  d delete  / search  u undo  ? all keys  q quit
-```
+![An agent checks items off and adds one while the TUI highlights each change](docs/demo.gif)
 
 - **Live.** Changes from agents appear within a quarter of a second and stay
   highlighted for a few seconds, with a note like `claude-code: checked 2 · added 1`.
@@ -260,8 +246,8 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
 
-`docs/demo.tape` records a demo GIF with [vhs](https://github.com/charmbracelet/vhs):
-`vhs docs/demo.tape`.
+The demo at the top is recorded from `docs/demo.tape` with
+[vhs](https://github.com/charmbracelet/vhs): `vhs docs/demo.tape`.
 
 ## License
 
