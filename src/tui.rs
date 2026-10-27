@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::Result;
 use ratatui::crossterm::event::{self, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Style, Stylize};
+use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, HighlightSpacing, List as ListWidget, ListItem, ListState, Paragraph,
@@ -19,6 +19,10 @@ use unicode_width::UnicodeWidthStr;
 use crate::store::{List, Store};
 
 const POLL: Duration = Duration::from_millis(250);
+
+// Only ANSI palette slots, never RGB, so the terminal's theme decides the actual colors.
+const ACCENT: Color = Color::Blue;
+const MUTED: Color = Color::DarkGray;
 
 const HELP: &[(&str, &str)] = &[
     ("space", "toggle"),
@@ -233,16 +237,22 @@ impl App {
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
 
         let done = self.list.items.iter().filter(|i| i.done).count();
+        let all_done = done > 0 && done == self.list.items.len();
+        // Titles inherit the border's color unless they set their own.
         let block = Block::bordered()
-            .border_style(Style::new().dark_gray())
-            .title(Line::from(" todo ").bold())
-            .title(Line::from(format!(" {done}/{} ", self.list.items.len())).right_aligned())
+            .border_style(Style::new().fg(MUTED))
+            .title(Line::from(" todo ").bold().fg(ACCENT))
+            .title(
+                Line::from(format!(" {done}/{} ", self.list.items.len()))
+                    .fg(if all_done { Color::Green } else { Color::Reset })
+                    .right_aligned(),
+            )
             .title_bottom(Line::from(format!(" {} ", tilde(self.store.path()))).right_aligned());
 
         if self.list.items.is_empty() {
             let hint = Paragraph::new(Line::from(vec![
                 "Nothing to do. Press ".dim(),
-                "a".bold(),
+                "a".bold().fg(ACCENT),
                 " to add an item.".dim(),
             ]))
             .centered()
@@ -262,19 +272,19 @@ impl App {
                 } else {
                     (" ".into(), item.text.as_str().into())
                 };
+                // Dim rather than MUTED, which would vanish on the MUTED selection bar.
                 ListItem::new(Line::from(vec![
-                    format!("{:>id_width$} ", item.id).dark_gray(),
-                    "[".dark_gray(),
+                    format!("{:>id_width$} [", item.id).dim(),
                     mark,
-                    "] ".dark_gray(),
+                    "] ".dim(),
                     text,
                 ]))
             });
             let list = ListWidget::new(rows)
                 .block(block)
-                .highlight_symbol("› ")
+                .highlight_symbol(Line::from("› ").fg(ACCENT))
                 .highlight_spacing(HighlightSpacing::Always)
-                .highlight_style(Style::new().bold().on_dark_gray());
+                .highlight_style(Style::new().bold().bg(MUTED));
             frame.render_stateful_widget(list, main, &mut self.state);
         }
 
@@ -289,7 +299,7 @@ impl App {
                 let (visible, cursor_x) = input.view(available);
                 frame
                     .set_cursor_position((footer.x + (prompt.width() + cursor_x) as u16, footer.y));
-                Line::from(vec![prompt.cyan().bold(), visible.into()])
+                Line::from(vec![prompt.fg(ACCENT).bold(), visible.into()])
             }
             Mode::Confirm(Action::Delete(id)) => {
                 let text = self
@@ -308,7 +318,7 @@ impl App {
                     HELP.iter()
                         .flat_map(|(key, what)| {
                             [
-                                Span::from(*key).bold(),
+                                Span::from(*key).bold().fg(ACCENT),
                                 Span::from(format!(" {what}  ")).dim(),
                             ]
                         })
