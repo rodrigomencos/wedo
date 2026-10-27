@@ -24,12 +24,18 @@ Type "(sleep 4; wedo -l auth-refactor done 2; sleep 3; wedo -l auth-refactor don
 Type "clear" Enter
 Show
 
-Type "wedo -l auth-refactor"
+Type "wedo"
 Sleep 500ms
+Enter
+Sleep 1.5s
+
+# wedo starts in the lists: move up to auth-refactor and open it.
+Type "k"
+Sleep 1s
 Enter
 
 # Watch the agent check items off and add one; each change is highlighted.
-Sleep 12s
+Sleep 10s
 
 # Then do some work ourselves.
 Type "j"
@@ -52,7 +58,11 @@ Enter
 Sleep 1s
 Escape
 Sleep 1s
-Tab
+
+# Back up to the lists and over to another one.
+Escape
+Sleep 1s
+Type "j"
 Sleep 2s
 Type "q"
 Sleep 500ms
