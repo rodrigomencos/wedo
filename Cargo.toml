@@ -2,6 +2,13 @@
 name = "wedo"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.89"
+description = "A terminal checklist you share with your AI agents, over a CLI and MCP"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rodrigomencos/wedo"
+readme = "README.md"
+keywords = ["todo", "checklist", "tui", "mcp", "agents"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 anyhow = "1.0.104"
